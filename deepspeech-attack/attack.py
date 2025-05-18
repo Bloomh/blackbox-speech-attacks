@@ -5,6 +5,7 @@ import Levenshtein
 import torchaudio
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     out = []
@@ -94,102 +95,148 @@ class Attacker:
         return sound
     
     # estimate gradient using NES black-box approach for audio
-    def estimate_gradient(self, sound, target, n_queries=25, true_blackbox=False):
+    def estimate_gradient(self, sound, target_labels, n_queries=25, true_blackbox=False):
         sigma = 0.05  # noise standard deviation
         grad = torch.zeros_like(sound)
-        print(f"sound shape: {sound.shape}")
+        # print(f"sound shape: {sound.shape}") # Keep commented for now
+        num_valid_queries = 0
         
         for i in range(n_queries):
-            print(f"NES gradient estimation: query {i+1}/{n_queries}", end="\r") # show progress on direction guess queries for gradient estimation
-            
-            # sample random direction
+            print(f"NES gradient estimation: query {i+1}/{n_queries}", end="\r")
             u_i = torch.randn_like(sound)
+            u_i = u_i / (torch.norm(u_i) + 1e-8) # Normalize perturbation
             
-            # query model at perturbed points
             sound_plus = torch.clamp(sound + sigma * u_i, min=-1, max=1)
             sound_minus = torch.clamp(sound - sigma * u_i, min=-1, max=1)
             
-            # get loss for both perturbed points (using CTC loss if we can peek at logits, otherwise use distance if true blackbox)
             if true_blackbox:
+                # _compute_distance uses self.target_string implicitly
                 loss_plus = self._compute_distance(sound_plus)
                 loss_minus = self._compute_distance(sound_minus)
             else:
-                loss_plus = self._compute_ctc_loss(sound_plus)
-                loss_minus = self._compute_ctc_loss(sound_minus)
+                # _compute_ctc_loss needs target_labels
+                loss_plus = self._compute_ctc_loss(sound_plus, target_labels)
+                loss_minus = self._compute_ctc_loss(sound_minus, target_labels)
             
-            # update gradient estimate (effectively a weighted sum)
-            grad += (loss_plus - loss_minus) * u_i
-            
-        print(" " * 50, end="\r")  # clear the line after NES queries
-        return -grad / (2 * n_queries * sigma)
+            if isinstance(loss_plus, float) and isinstance(loss_minus, float) and not (math.isnan(loss_plus) or math.isinf(loss_plus) or math.isnan(loss_minus) or math.isinf(loss_minus)):
+                grad += (loss_plus - loss_minus) * u_i
+                num_valid_queries +=1
+            # else: # Optional: print if skipping due to NaN/Inf
+                # print(f"\nSkipping query {i+1} due to NaN/Inf in loss values (L+: {loss_plus}, L-: {loss_minus}).")
+
+        print(" " * 70, end="\r")  # Clear the line
+        if num_valid_queries == 0:
+            print("\nWarning: No valid queries in estimate_gradient. Returning zero gradient.")
+            return torch.zeros_like(grad)
+        return -grad / (num_valid_queries * 2 * sigma) # Average over valid queries
 
     # compute CTC loss for audio - this is a helper for gradient estimation
-    def _compute_ctc_loss(self, sound):
-        with torch.no_grad(): # don't track gradient since we're still tied to the model - we wanna be entirely blackbox
-            # this is largely the same as PGD below
+    def _compute_ctc_loss(self, sound, target_labels):
+        with torch.no_grad():
             spec = torch_spectrogram(sound, self.torch_stft)
-            input_sizes = torch.IntTensor([spec.size(3)]).int()
-            out, output_sizes = self.model(spec, input_sizes) # effective blackbox query is right here
-            out = out.transpose(0, 1)  # T x N x H
-            out = out.log_softmax(2)
-            loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
-        
+            # Assuming spec is (B,C,Time,Freq) after permute, model needs Time for input_sizes
+            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
+            out, output_sizes = self.model(spec, input_sizes)
+            out = out.transpose(0, 1).log_softmax(2)
+            loss = self.criterion(out, target_labels, output_sizes, self.target_lengths)
         return loss.item()
     
     def _compute_distance(self, sound):
         """Compute score for black-box attack using only final transcription"""
         with torch.no_grad():
-            # Get transcription from the model
             spec = torch_spectrogram(sound, self.torch_stft)
-            input_sizes = torch.IntTensor([spec.size(3)]).int()
-            
-            # this would be a true blackbox query where we are only working with the final output rather than logits
+            # Assuming spec is (B,C,Time,Freq) after permute
+            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
             out, output_sizes = self.model(spec, input_sizes)
             decoded_output, _ = self.decoder.decode(out, output_sizes)
             transcription = decoded_output[0][0]
-            
-            # calculate Levenshtein distance to target
-            distance = Levenshtein.distance(transcription, self.target_string) 
-            
-        # distance being high is bad here so we can treat it as a loss of sorts
+            distance = Levenshtein.distance(transcription, self.target_string)
         return distance
 
     # mostly ai generated. just for testing if our gradient estimation was used
     # this is not used in any actual attacks
     def _compare_gradients(self, sound, n_queries=25):
         """Compare NES estimated gradient with actual gradient"""
-        sound_copy = sound.clone().detach()
-        sound_copy.requires_grad = True
+        target_labels_device = self.target.to(self.device) # Use the label tensor
+
+        print("Computing actual gradient via backpropagation...")
+        sound_copy = sound.clone().detach().requires_grad_(True)
+        actual_grad = torch.zeros_like(sound) # Default to zero grad
+        try:
+            spec = torch_spectrogram(sound_copy, self.torch_stft)
+            # Assuming spec is (B,C,Time,Freq) after permute
+            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
+            out, output_sizes = self.model(spec, input_sizes)
+            out = out.transpose(0, 1).log_softmax(2)
+            if torch.isnan(out).any():
+                print("WARNING: NaN values detected in model outputs for actual grad!")
+                out = torch.nan_to_num(out)
+            loss = self.criterion(out, target_labels_device, output_sizes, self.target_lengths)
+            self.model.zero_grad()
+            loss.backward()
+            if sound_copy.grad is not None:
+                actual_grad_temp = sound_copy.grad.data.clone()
+                # Apply gradient clipping to prevent extreme values
+                max_norm = 1.0 # You can adjust this value
+                grad_norm = torch.norm(actual_grad_temp)
+                if grad_norm > max_norm:
+                    actual_grad_temp = actual_grad_temp * (max_norm / grad_norm)
+                actual_grad = torch.nan_to_num(actual_grad_temp)
+            else:
+                print("WARNING: sound_copy.grad is None after backward(). Actual grad will be zeros.")
+        except Exception as e:
+            print(f"Error computing actual gradient: {e}")
+            actual_grad = torch.nan_to_num(torch.zeros_like(sound)) # Ensure it's a tensor
         
-        # Compute actual gradient with backprop
-        spec = torch_spectrogram(sound_copy, self.torch_stft)
-        input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = self.model(spec, input_sizes)
-        out = out.transpose(0, 1)  # TxNxH
-        out = out.log_softmax(2)
-        loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
+        print("Computing estimated gradient with NES (direct audio perturbation)...")
+        estimated_grad_raw = self.estimate_gradient(sound, target_labels_device, n_queries)
+        estimated_grad = torch.nan_to_num(estimated_grad_raw)
         
-        self.model.zero_grad()
-        loss.backward()
-        actual_grad = sound_copy.grad.data
+        # Apply smoothing to both gradients
+        # Kernel size 5, stride 1, padding 2 for same-size output
+        # Ensure gradients are at least 3D for avg_pool1d: (N, C, L)
+        actual_grad_smoothed = torch.nn.functional.avg_pool1d(actual_grad.view(1, 1, -1), kernel_size=5, stride=1, padding=2).view_as(actual_grad)
+        estimated_grad_smoothed = torch.nn.functional.avg_pool1d(estimated_grad.view(1, 1, -1), kernel_size=5, stride=1, padding=2).view_as(estimated_grad)
         
-        # Compute estimated gradient with NES
-        estimated_grad = self.estimate_gradient(sound, self.target, n_queries)
+        actual_norm = torch.norm(actual_grad_smoothed)
+        estimated_norm = torch.norm(estimated_grad_smoothed)
+        print(f"Actual gradient norm (smoothed): {actual_norm.item():.6f}")
+        print(f"Estimated gradient norm (smoothed): {estimated_norm.item():.6f}")
         
-        # Compare gradients
-        cos_sim = torch.nn.functional.cosine_similarity(
-            actual_grad.flatten(), estimated_grad.flatten(), dim=0)
+        cos_sim = torch.tensor(0.0) # Default value
+        if actual_norm > 1e-8 and estimated_norm > 1e-8: # Check for non-zero norms
+            cos_sim = torch.nn.functional.cosine_similarity(actual_grad_smoothed.flatten(), estimated_grad_smoothed.flatten(), dim=0)
+        else:
+            print("WARNING: One or both smoothed gradients have near-zero norm. Cosine similarity set to 0.")
         
-        # Compare signs
-        actual_sign = actual_grad.sign()
-        estimated_sign = estimated_grad.sign()
-        sign_agreement = (actual_sign == estimated_sign).float().mean()
+        sign_agreement = torch.tensor(0.0)
+        non_zero_mask = (actual_grad_smoothed.abs() > 1e-8) & (estimated_grad_smoothed.abs() > 1e-8)
+        if non_zero_mask.sum() > 0:
+            sign_agreement = (actual_grad_smoothed[non_zero_mask].sign() == estimated_grad_smoothed[non_zero_mask].sign()).float().mean()
+        else:
+            print("WARNING: No overlapping significant elements for sign agreement after smoothing.")
         
-        print(f"Gradient comparison:")
-        print(f"  Cosine similarity: {cos_sim.item():.4f} (closer to 1 is better)")
-        print(f"  Sign agreement: {sign_agreement.item():.4f} (percentage of matching signs)")
+        top_sign_agreement = torch.tensor(0.0)
+        try:
+            if actual_norm > 1e-8:
+                k = max(int(0.1 * actual_grad_smoothed.numel()), 1)
+                if k > 0 and actual_grad_smoothed.numel() > 0:
+                    _, top_indices = torch.topk(torch.abs(actual_grad_smoothed).flatten(), k)
+                    if top_indices.numel() > 0:
+                        top_actual_signs = torch.gather(actual_grad_smoothed.flatten().sign(), 0, top_indices)
+                        top_estimated_signs = torch.gather(estimated_grad_smoothed.flatten().sign(), 0, top_indices)
+                        top_sign_agreement = (top_actual_signs == top_estimated_signs).float().mean()
+            else:
+                 print("WARNING: Actual smoothed gradient norm near zero, skipping top sign agreement.")
+        except Exception as e:
+            print(f"Error computing top sign agreement: {e}")
+
+        print(f"Gradient comparison (smoothed gradients):")
+        print(f"  Cosine similarity: {cos_sim.item():.4f}")
+        print(f"  Overall sign agreement: {sign_agreement.item():.4f}")
+        print(f"  Top 10% sign agreement: {top_sign_agreement.item():.4f}")
         
-        return cos_sim.item(), sign_agreement.item()
+        return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
@@ -219,7 +266,7 @@ class Attacker:
             for i in range(PGD_round):
                 print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 # estimate gradient using NES
-                data_grad = self.estimate_gradient(data, target, n_queries)
+                data_grad = self.estimate_gradient(data, self.target.to(self.device), n_queries)
                 # now that ew've estimated gradient, everything should be the same as PGD
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
             perturbed_data = data
@@ -227,7 +274,7 @@ class Attacker:
         elif attack_type == "NES_BLACK": # can't even use ctc loss because we don't have access to logits
             for i in range(PGD_round):
                 print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
-                data_grad = self.estimate_gradient(data, target, n_queries, true_blackbox=True)
+                data_grad = self.estimate_gradient(data, self.target.to(self.device), n_queries, true_blackbox=True)
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
             perturbed_data = data
 

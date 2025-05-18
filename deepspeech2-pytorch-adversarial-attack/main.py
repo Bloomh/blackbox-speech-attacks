@@ -16,10 +16,11 @@ if __name__ == "__main__":
     
     # attack parameters
     parser.add_argument('--target_sentence', type=str, default="HELLO WORLD", help='Please use uppercase')
-    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM')
+    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new] NES')
     parser.add_argument('--epsilon', type=float, default=0.25, help='epsilon')
     parser.add_argument('--alpha', type=float, default=1e-3, help='alpha')
     parser.add_argument('--PGD_iter', type=int, default=50, help='PGD iteration times')
+    parser.add_argument('--n_queries', type=int, default=25, help='Number of queries for NES attack')
 
     # plot parameters
     parser.add_argument('--plot_ori_spec', type=str, default="None", help='Path to save the original spectrogram')
@@ -36,7 +37,7 @@ if __name__ == "__main__":
         args.output_wav = None
     attacker = Attacker(model=model, sound=sound, target=target_sentence, decoder=decoder, device=args.device, save=args.output_wav)
 
-    attacker.attack(epsilon = args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter)
+    attacker.attack(epsilon = args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 
     if args.plot_ori_spec != "None":
         attacker.get_ori_spec(args.plot_ori_spec)

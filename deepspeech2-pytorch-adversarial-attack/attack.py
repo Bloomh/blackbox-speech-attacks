@@ -93,8 +93,8 @@ class Attacker:
 
         return sound
     
-    def estimate_gradient(self, sound, target, n_queries=25):
-        """Estimate gradient using NES black-box approach for audio"""
+    # estimate gradient using NES black-box approach for audio
+    def estimate_gradient(self, sound, target, n_queries=25, true_blackbox=False):
         sigma = 0.02  # noise standard deviation
         grad = torch.zeros_like(sound)
         
@@ -108,9 +108,13 @@ class Attacker:
             sound_plus = torch.clamp(sound + sigma * u_i, min=-1, max=1)
             sound_minus = torch.clamp(sound - sigma * u_i, min=-1, max=1)
             
-            # get loss for both perturbed points (using CTC loss)
-            loss_plus = self._compute_ctc_loss(sound_plus)
-            loss_minus = self._compute_ctc_loss(sound_minus)
+            # get loss for both perturbed points (using CTC loss if we can peek at logits, otherwise use distance if true blackbox)
+            if true_blackbox:
+                loss_plus = self._compute_distance(sound_plus)
+                loss_minus = self._compute_distance(sound_minus)
+            else:
+                loss_plus = self._compute_ctc_loss(sound_plus)
+                loss_minus = self._compute_ctc_loss(sound_minus)
             
             # update gradient estimate (effectively a weighted sum)
             grad += (loss_plus - loss_minus) * u_i
@@ -124,12 +128,30 @@ class Attacker:
             # this is largely the same as PGD below
             spec = torch_spectrogram(sound, self.torch_stft)
             input_sizes = torch.IntTensor([spec.size(3)]).int()
-            out, output_sizes = self.model(spec, input_sizes)
+            out, output_sizes = self.model(spec, input_sizes) # effective blackbox query is right here
             out = out.transpose(0, 1)  # T x N x H
             out = out.log_softmax(2)
             loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
         
         return loss.item()
+    
+    def _compute_distance(self, sound):
+        """Compute score for black-box attack using only final transcription"""
+        with torch.no_grad():
+            # Get transcription from the model
+            spec = torch_spectrogram(sound, self.torch_stft)
+            input_sizes = torch.IntTensor([spec.size(3)]).int()
+            
+            # this would be a true blackbox query where we are only working with the final output rather than logits
+            out, output_sizes = self.model(spec, input_sizes)
+            decoded_output, _ = self.decoder.decode(out, output_sizes)
+            transcription = decoded_output[0][0]
+            
+            # calculate Levenshtein distance to target
+            distance = Levenshtein.distance(transcription, self.target_string) 
+            
+        # distance being high is bad here so we can treat it as a loss of sorts
+        return distance
 
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
@@ -146,13 +168,20 @@ class Attacker:
         print(f"Original prediction: {original_output}")
         
         # BLACK BOX ATTACK
-        if attack_type == "NES":
+        if attack_type == "NES_GREY":
             # we'll assume that we only want pgd in this case 
             for i in range(PGD_round):
                 print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 # estimate gradient using NES
                 data_grad = self.estimate_gradient(data, target, n_queries)
                 # now that ew've estimated gradient, everything should be the same as PGD
+                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+            perturbed_data = data
+            
+        elif attack_type == "NES_BLACK": # can't even use ctc loss because we don't have access to logits
+            for i in range(PGD_round):
+                print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
+                data_grad = self.estimate_gradient(data, target, n_queries, true_blackbox=True)
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
             perturbed_data = data
 

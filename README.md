@@ -1,4 +1,4 @@
-(cooked rn) instructions to get off the ground @henry:
+## (cooked rn) instructions to get off the ground @henry:
 
 - to clone properly, run `git clone --recursive [url]` 
     - we have a recursive dependency so to keep things clean I used a submodule and fixed it on an old commit
@@ -9,3 +9,5 @@
     - if preprocessing of original audio file in `deepspeech2-pytorch-adversarial-attack/sound/` hasn't happened yet, run `python3 preprocessing.py --input_folder sound --output_folder processed_sound`
     - run `python3 main.py --input_wav processed_sound/normal0.wav --output_wav to_save.wav --target_sentence HELLO_WORD --model ../models/librispeech/librispeech_pretrained_v2.pth --device cpu` to do the actual attack (I haven't looked into this too much but it outputs a promising looking file). 
         - If you have gpu or mps, change the device obv.
+
+ideally, if you can get this up and running on your machine, I want you to try replicating this exactly on beehhive while I try to see if we can do anything black-boxy here with NES.

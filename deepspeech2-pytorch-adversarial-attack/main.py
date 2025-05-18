@@ -16,7 +16,7 @@ if __name__ == "__main__":
     
     # attack parameters
     parser.add_argument('--target_sentence', type=str, default="HELLO WORLD", help='Please use uppercase')
-    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new] NES')
+    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new -->] NES_GREY or NES_BLACK')
     parser.add_argument('--epsilon', type=float, default=0.25, help='epsilon')
     parser.add_argument('--alpha', type=float, default=1e-3, help='alpha')
     parser.add_argument('--PGD_iter', type=int, default=50, help='PGD iteration times')

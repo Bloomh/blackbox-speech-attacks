@@ -13,16 +13,24 @@ def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
         out.append(labels.index(word))
     return torch.IntTensor(out)
 
-def torch_spectrogram(sound, torch_stft):
-    real, imag = torch_stft(sound)
-    mag, cos, sin = magphase(real, imag)
-    mag = torch.log1p(mag)
-    mean = mag.mean()
-    std = mag.std()
-    mag = mag - mean
-    mag = mag / std
-    mag = mag.permute(0,1,3,2)
-    return mag
+def torch_spectrogram(sound, torch_stft_func):
+    """Computes spectrograms.
+    Returns:
+        spec_for_model (Tensor): Normalized log-mag spectrogram, permuted (B,C,Time,Freq).
+        norm_log_mag_unpermuted (Tensor): Normalized log-mag spectrogram, unpermuted (B,C,Freq,Time).
+    """
+    real, imag = torch_stft_func(sound)
+    mag, _, _ = magphase(real, imag)
+    log_mag = torch.log1p(mag) # Shape: (B, C, Freq, Time)
+    
+    # Per-instance, per-channel normalization
+    mean = log_mag.mean(dim=(2,3), keepdim=True)
+    std = log_mag.std(dim=(2,3), keepdim=True)
+    norm_log_mag_unpermuted = (log_mag - mean) / (std + 1e-8)
+    
+    # Permute for the model: (B,C,Freq,Time) -> (B,C,Time,Freq)
+    spec_for_model = norm_log_mag_unpermuted.permute(0,1,3,2)
+    return spec_for_model, norm_log_mag_unpermuted
 
 
 class Attacker:
@@ -32,7 +40,7 @@ class Attacker:
         sound: raw sound data [-1 to +1] (read from torchaudio.load)
         label: string
         """
-        self.sound = sound
+        self.sound = sound.to(device)
         self.sample_rate = sample_rate
         self.target_string = target
         self.target = target
@@ -47,12 +55,12 @@ class Attacker:
         n_fft = int(self.sample_rate * 0.02)
         hop_length = int(self.sample_rate * 0.01)
         win_length = int(self.sample_rate * 0.02)
-        self.torch_stft = STFT(n_fft=n_fft , hop_length=hop_length, win_length=win_length ,  window='hamming', center=True, pad_mode='reflect', freeze_parameters=True, device=self.device)
+        self.torch_stft_func = STFT(n_fft=n_fft, hop_length=hop_length, win_length=win_length, window='hamming', center=True, pad_mode='reflect', freeze_parameters=True, device=self.device)
         self.save = save
     
     def get_ori_spec(self, save=None):
-        spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
-        plt.imshow(spec.cpu().numpy()[0][0])
+        spec_for_model, _ = torch_spectrogram(self.sound, self.torch_stft_func)
+        plt.imshow(spec_for_model.cpu().detach().numpy()[0][0])
         if save:
             plt.savefig(save)
             plt.clf()
@@ -60,13 +68,16 @@ class Attacker:
             plt.show()
 
     def get_adv_spec(self, save=None):
-        spec = torch_spectrogram(self.perturbed_data.to(self.device), self.torch_stft)
-        plt.imshow(spec.cpu().numpy()[0][0])
-        if save:
-            plt.savefig(save)
-            plt.clf()
+        if hasattr(self, 'perturbed_data'):
+            spec_for_model, _ = torch_spectrogram(self.perturbed_data, self.torch_stft_func)
+            plt.imshow(spec_for_model.cpu().detach().numpy()[0][0])
+            if save:
+                plt.savefig(save)
+                plt.clf()
+            else:
+                plt.show()
         else:
-            plt.show()
+            print("No perturbed data to visualize.")
     
     # prepare
     def __init_target(self):
@@ -95,59 +106,39 @@ class Attacker:
         return sound
     
     # estimate gradient using NES black-box approach for audio
-    def estimate_gradient(self, sound, target_labels, n_queries=25, true_blackbox=False):
-        sigma = 0.05  # noise standard deviation
+    def estimate_audio_gradient_nes(self, sound, target_labels, n_queries=25, true_blackbox=False, sigma=0.05):
         grad = torch.zeros_like(sound)
-        # print(f"sound shape: {sound.shape}") # Keep commented for now
         num_valid_queries = 0
-        
         for i in range(n_queries):
-            print(f"NES gradient estimation: query {i+1}/{n_queries}", end="\r")
-            u_i = torch.randn_like(sound)
-            u_i = u_i / (torch.norm(u_i) + 1e-8) # Normalize perturbation
-            
+            print(f"NES for AudioGrad: query {i+1}/{n_queries}", end="\r")
+            u_i = torch.randn_like(sound) / (torch.norm(torch.randn_like(sound)) + 1e-8)
             sound_plus = torch.clamp(sound + sigma * u_i, min=-1, max=1)
             sound_minus = torch.clamp(sound - sigma * u_i, min=-1, max=1)
-            
-            if true_blackbox:
-                # _compute_distance uses self.target_string implicitly
-                loss_plus = self._compute_distance(sound_plus)
-                loss_minus = self._compute_distance(sound_minus)
-            else:
-                # _compute_ctc_loss needs target_labels
-                loss_plus = self._compute_ctc_loss(sound_plus, target_labels)
-                loss_minus = self._compute_ctc_loss(sound_minus, target_labels)
-            
-            if isinstance(loss_plus, float) and isinstance(loss_minus, float) and not (math.isnan(loss_plus) or math.isinf(loss_plus) or math.isnan(loss_minus) or math.isinf(loss_minus)):
+            loss_plus = self._compute_ctc_loss_from_spec(torch_spectrogram(sound_plus, self.torch_stft_func)[0], target_labels) if not true_blackbox else self._compute_distance(sound_plus)
+            loss_minus = self._compute_ctc_loss_from_spec(torch_spectrogram(sound_minus, self.torch_stft_func)[0], target_labels) if not true_blackbox else self._compute_distance(sound_minus)
+            if not (math.isnan(loss_plus) or math.isinf(loss_plus) or math.isnan(loss_minus) or math.isinf(loss_minus)):
                 grad += (loss_plus - loss_minus) * u_i
                 num_valid_queries +=1
-            # else: # Optional: print if skipping due to NaN/Inf
-                # print(f"\nSkipping query {i+1} due to NaN/Inf in loss values (L+: {loss_plus}, L-: {loss_minus}).")
-
-        print(" " * 70, end="\r")  # Clear the line
-        if num_valid_queries == 0:
-            print("\nWarning: No valid queries in estimate_gradient. Returning zero gradient.")
-            return torch.zeros_like(grad)
-        return -grad / (num_valid_queries * 2 * sigma) # Average over valid queries
+        print(" "*70, end="\r")
+        if num_valid_queries == 0: return torch.zeros_like(grad)
+        return -grad / (num_valid_queries * 2 * sigma)
 
     # compute CTC loss for audio - this is a helper for gradient estimation
-    def _compute_ctc_loss(self, sound, target_labels):
+    def _compute_ctc_loss_from_spec(self, spec_for_model, target_labels_for_loss):
         with torch.no_grad():
-            spec = torch_spectrogram(sound, self.torch_stft)
-            # Assuming spec is (B,C,Time,Freq) after permute, model needs Time for input_sizes
-            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
+            input_sizes = torch.IntTensor([spec_for_model.size(2)]).int().to(self.device)
+            out, output_sizes = self.model(spec_for_model, input_sizes)
             out = out.transpose(0, 1).log_softmax(2)
-            loss = self.criterion(out, target_labels, output_sizes, self.target_lengths)
+            loss = self.criterion(out, target_labels_for_loss, output_sizes, self.target_lengths)
         return loss.item()
     
     def _compute_distance(self, sound):
         """Compute score for black-box attack using only final transcription"""
         with torch.no_grad():
-            spec = torch_spectrogram(sound, self.torch_stft)
+            spec_for_model, _ = torch_spectrogram(sound, self.torch_stft_func)
             # Assuming spec is (B,C,Time,Freq) after permute
-            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
+            input_sizes = torch.IntTensor([spec_for_model.size(2)]).int() # Corrected to use Time dimension
+            out, output_sizes = self.model(spec_for_model, input_sizes)
             decoded_output, _ = self.decoder.decode(out, output_sizes)
             transcription = decoded_output[0][0]
             distance = Levenshtein.distance(transcription, self.target_string)
@@ -163,10 +154,10 @@ class Attacker:
         sound_copy = sound.clone().detach().requires_grad_(True)
         actual_grad = torch.zeros_like(sound) # Default to zero grad
         try:
-            spec = torch_spectrogram(sound_copy, self.torch_stft)
+            spec_for_model, _ = torch_spectrogram(sound_copy, self.torch_stft_func)
             # Assuming spec is (B,C,Time,Freq) after permute
-            input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
+            input_sizes = torch.IntTensor([spec_for_model.size(2)]).int() # Corrected to use Time dimension
+            out, output_sizes = self.model(spec_for_model, input_sizes)
             out = out.transpose(0, 1).log_softmax(2)
             if torch.isnan(out).any():
                 print("WARNING: NaN values detected in model outputs for actual grad!")
@@ -189,7 +180,7 @@ class Attacker:
             actual_grad = torch.nan_to_num(torch.zeros_like(sound)) # Ensure it's a tensor
         
         print("Computing estimated gradient with NES (direct audio perturbation)...")
-        estimated_grad_raw = self.estimate_gradient(sound, target_labels_device, n_queries)
+        estimated_grad_raw = self.estimate_audio_gradient_nes(sound, target_labels_device, n_queries)
         estimated_grad = torch.nan_to_num(estimated_grad_raw)
         
         # Apply smoothing to both gradients
@@ -238,101 +229,232 @@ class Attacker:
         
         return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
+    def estimate_spectrogram_gradient_nes(self, initial_sound, target_labels_for_loss, n_queries=50, sigma_spec=0.1):
+        """ Estimates d(Loss)/d(norm_log_mag_unpermuted) using NES. """
+        _, norm_log_mag_unpermuted_target = torch_spectrogram(initial_sound.clone().detach(), self.torch_stft_func)
+        # print(f"[NES on Spectrogram] Shape of norm_log_mag_unpermuted_target (B,C,Freq,Time): {norm_log_mag_unpermuted_target.shape}") # Print dimensions
+        
+        grad_norm_log_mag_accum = torch.zeros_like(norm_log_mag_unpermuted_target)
+        num_valid_queries = 0
+
+        for i in range(n_queries):
+            print(f"NES for SpecGrad: query {i+1}/{n_queries}", end="\r")
+            u_i_spec = torch.randn_like(norm_log_mag_unpermuted_target)
+            u_i_spec = u_i_spec / (torch.norm(u_i_spec.flatten(), p=2) + 1e-8)
+            
+            perturbed_spec_plus = norm_log_mag_unpermuted_target + sigma_spec * u_i_spec
+            perturbed_spec_minus = norm_log_mag_unpermuted_target - sigma_spec * u_i_spec
+            
+            spec_for_loss_plus = perturbed_spec_plus.permute(0,1,3,2)
+            spec_for_loss_minus = perturbed_spec_minus.permute(0,1,3,2)
+            
+            loss_plus = self._compute_ctc_loss_from_spec(spec_for_loss_plus, target_labels_for_loss)
+            loss_minus = self._compute_ctc_loss_from_spec(spec_for_loss_minus, target_labels_for_loss)
+
+            if not (math.isnan(loss_plus) or math.isinf(loss_plus) or math.isnan(loss_minus) or math.isinf(loss_minus)):
+                directional_derivative_spec = (loss_plus - loss_minus) / (2 * sigma_spec)
+                grad_norm_log_mag_accum += directional_derivative_spec * u_i_spec
+                num_valid_queries += 1
+        
+        print(" " * 70, end="\r")
+        if num_valid_queries == 0:
+            print("\nWarning: No valid queries in estimate_spectrogram_gradient_nes.")
+            return torch.zeros_like(norm_log_mag_unpermuted_target)
+        return -grad_norm_log_mag_accum / num_valid_queries
+
+    def _compare_spectrogram_gradients(self, sound_tensor, n_queries=100, sigma_spec=0.1):
+        print("Comparing Spectrogram Gradients...")
+        target_labels_device = self.target.to(self.device)
+
+        # --- True Spectrogram Gradient --- 
+        print("Calculating true spectrogram gradient...")
+        sound_for_true_grad = sound_tensor.clone().detach()
+        _, norm_log_mag_unpermuted_actual = torch_spectrogram(sound_for_true_grad, self.torch_stft_func)
+        norm_log_mag_unpermuted_actual.requires_grad_(True)
+        
+        spec_for_model_actual = norm_log_mag_unpermuted_actual.permute(0,1,3,2)
+        input_sizes_actual = torch.IntTensor([spec_for_model_actual.size(2)]).int().to(self.device)
+        out_actual, output_sizes_actual = self.model(spec_for_model_actual, input_sizes_actual)
+        out_actual_processed = out_actual.transpose(0,1).log_softmax(2)
+        
+        if torch.isnan(out_actual_processed).any():
+            print("Warning: NaN in model output for true spec grad!")
+            out_actual_processed = torch.nan_to_num(out_actual_processed)
+
+        loss_actual = self.criterion(out_actual_processed, target_labels_device, output_sizes_actual, self.target_lengths)
+        self.model.zero_grad()
+        loss_actual.backward()
+        true_spec_grad = norm_log_mag_unpermuted_actual.grad.clone() if norm_log_mag_unpermuted_actual.grad is not None else torch.zeros_like(norm_log_mag_unpermuted_actual)
+        true_spec_grad = torch.nan_to_num(true_spec_grad)
+
+        # --- Estimated Spectrogram Gradient (NES) --- 
+        print("Estimating spectrogram gradient with NES...")
+        estimated_spec_grad = self.estimate_spectrogram_gradient_nes(sound_tensor, target_labels_device, n_queries, sigma_spec)
+        estimated_spec_grad = torch.nan_to_num(estimated_spec_grad)
+
+        # --- Comparison --- 
+        # Smoothing (optional, but can help for noisy high-dim grads)
+        # For spectrograms (B,C,F,T), we might pool over F and T if desired, or just flatten
+        # Here, let's flatten for direct comparison. For avg_pool, would need to reshape.
+        # For simplicity, let's compare flattened versions directly. If too noisy, add specific pooling.
+
+        true_flat = true_spec_grad.flatten()
+        est_flat = estimated_spec_grad.flatten()
+
+        true_norm = torch.norm(true_flat, p=2)
+        est_norm = torch.norm(est_flat, p=2)
+        print(f"True Spec Grad Norm: {true_norm.item():.6f}, Estimated Spec Grad Norm: {est_norm.item():.6f}")
+
+        cos_sim = torch.tensor(0.0, device=self.device)
+        if true_norm > 1e-8 and est_norm > 1e-8:
+            cos_sim = torch.nn.functional.cosine_similarity(true_flat, est_flat, dim=0)
+        else:
+            print("Warning: Near-zero norm for one or both spec grads.")
+
+        sign_agreement = torch.tensor(0.0, device=self.device)
+        non_zero_mask = (true_flat.abs() > 1e-8) & (est_flat.abs() > 1e-8)
+        if non_zero_mask.sum() > 0:
+            sign_agreement = (true_flat[non_zero_mask].sign() == est_flat[non_zero_mask].sign()).float().mean()
+        else:
+            print("Warning: No overlapping significant elements for spec grad sign agreement.")
+        
+        print(f"Spectrogram Gradient Comparison:")
+        print(f"  Cosine Similarity: {cos_sim.item():.4f}")
+        print(f"  Sign Agreement: {sign_agreement.item():.4f}")
+        return cos_sim.item(), sign_agreement.item()
+
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
-        
-        data, target = self.sound.to(self.device), self.target.to(self.device)
+        data = self.sound # Already on device from __init__
+        target_labels_device = self.target.to(self.device) # Already on device
         data_raw = data.clone().detach()
-        
-        # initial prediction
-        spec = torch_spectrogram(data, self.torch_stft)
-        input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = self.model(spec, input_sizes)
-        decoded_output, decoded_offsets = self.decoder.decode(out, output_sizes)
-        original_output = decoded_output[0][0]
-        print(f"Original prediction: {original_output}")
-        
-        # TEST GRADIENT ESTIMATION
-        if attack_type == "TEST_BB":
-            # test how well we estimate gradient using NES
-            self._compare_gradients(data, n_queries)
-            perturbed_data = data
-        
-        # BLACK BOX ATTACKS
-        
-        # NES_GREY: we can peek at logits but we don't have access to the model
-        if attack_type == "NES_GREY":
-            # we'll assume that we only want pgd in this case 
-            for i in range(PGD_round):
-                print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
-                # estimate gradient using NES
-                data_grad = self.estimate_gradient(data, self.target.to(self.device), n_queries)
-                # now that ew've estimated gradient, everything should be the same as PGD
-                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
-            perturbed_data = data
-            
-        elif attack_type == "NES_BLACK": # can't even use ctc loss because we don't have access to logits
-            for i in range(PGD_round):
-                print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
-                data_grad = self.estimate_gradient(data, self.target.to(self.device), n_queries, true_blackbox=True)
-                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
-            perturbed_data = data
 
-        # WHITE-BOX ATTACKS (original code):
+        # Initial prediction
+        spec_for_model_orig, _ = torch_spectrogram(data, self.torch_stft_func)
+        input_sizes_orig = torch.IntTensor([spec_for_model_orig.size(2)]).int().to(self.device)
+        out_orig, output_sizes_orig = self.model(spec_for_model_orig, input_sizes_orig)
+        decoded_output_orig, _ = self.decoder.decode(out_orig, output_sizes_orig)
+        original_output = decoded_output_orig[0][0] if decoded_output_orig and decoded_output_orig[0] else ""
+        print(f"Original prediction: {original_output}")
+
+        perturbed_data = data.clone() # Start with a copy for attacks
+
+        if attack_type == "TEST_BB":
+            print("--- Running Spectrogram Gradient Comparison (TEST_BB) ---")
+            self._compare_spectrogram_gradients(data, n_queries=n_queries) # data is original sound
+            # No actual attack in TEST_BB, perturbed_data remains original sound
         
-        if attack_type == "FGSM":
-            data.requires_grad = True
-            
-            spec = torch_spectrogram(data, self.torch_stft)
-            input_sizes = torch.IntTensor([spec.size(3)]).int()
-            out, output_sizes = self.model(spec, input_sizes)
-            out = out.transpose(0, 1)  # T x N x H
-            out = out.log_softmax(2)
-            loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
-            
+        elif attack_type == "FGSM": # White-box FGSM
+            print("Performing FGSM attack...")
+            perturbed_data.requires_grad = True
+            spec_for_model, _ = torch_spectrogram(perturbed_data, self.torch_stft_func)
+            input_sizes = torch.IntTensor([spec_for_model.size(2)]).int().to(self.device)
+            out, output_sizes = self.model(spec_for_model, input_sizes)
+            out_processed = out.transpose(0, 1).log_softmax(2)
+            loss = self.criterion(out_processed, target_labels_device, output_sizes, self.target_lengths)
             self.model.zero_grad()
             loss.backward()
-            data_grad = data.grad.data
-            
-            print(f"data grad shape: {data_grad.shape}")
+            audio_grad = perturbed_data.grad.data.clone()
+            perturbed_data = self.fgsm_attack(perturbed_data.detach(), epsilon, audio_grad) # Detach before passing to attack func
 
-            perturbed_data = self.fgsm_attack(data, epsilon, data_grad)
-
-        elif attack_type == "PGD":
+        elif attack_type == "PGD": # White-box PGD
+            print("Performing PGD attack...")
             for i in range(PGD_round):
-                print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
-                data.requires_grad = True
-                
-                spec = torch_spectrogram(data, self.torch_stft)
-                input_sizes = torch.IntTensor([spec.size(3)]).int()
-                out, output_sizes = self.model(spec, input_sizes)
-                out = out.transpose(0, 1)  # TxNxH
-                out = out.log_softmax(2)
-                loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
-                
+                print(f"PGD iter {i+1}/{PGD_round}", end="\r")
+                perturbed_data.requires_grad = True
+                spec_for_model, _ = torch_spectrogram(perturbed_data, self.torch_stft_func)
+                input_sizes = torch.IntTensor([spec_for_model.size(2)]).int().to(self.device)
+                out, output_sizes = self.model(spec_for_model, input_sizes)
+                out_processed = out.transpose(0, 1).log_softmax(2)
+                loss = self.criterion(out_processed, target_labels_device, output_sizes, self.target_lengths)
                 self.model.zero_grad()
+                if perturbed_data.grad is not None: # Zero existing grads before new backward
+                    perturbed_data.grad.zero_()
                 loss.backward()
-                data_grad = data.grad.data
+                audio_grad = perturbed_data.grad.data.clone()
+                perturbed_data = self.pgd_attack(perturbed_data.detach(), data_raw, epsilon, alpha, audio_grad)
+            print(" " * 70, end="\r")
 
-                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
-            perturbed_data = data
-            
-        # prediction of adversarial sound
-        spec = torch_spectrogram(perturbed_data, self.torch_stft)
-        input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = self.model(spec, input_sizes)
-        decoded_output, decoded_offsets = self.decoder.decode(out, output_sizes)
-        final_output = decoded_output[0][0]
+        elif attack_type == "NES_GREY": # Black-box (grey-box) audio perturbation PGD
+            print("Performing NES_GREY (audio perturbation) PGD attack...")
+            for i in range(PGD_round):
+                print(f"NES_GREY PGD iter {i+1}/{PGD_round}", end="\r")
+                # Use estimate_audio_gradient_nes, true_blackbox=False (default)
+                audio_grad = self.estimate_audio_gradient_nes(perturbed_data, target_labels_device, n_queries)
+                perturbed_data = self.pgd_attack(perturbed_data, data_raw, epsilon, alpha, audio_grad).detach()
+            print(" " * 70, end="\r")
+
+        elif attack_type == "NES_BLACK": # True Black-box audio perturbation PGD
+            print("Performing NES_BLACK (audio perturbation, Levenshtein loss) PGD attack...")
+            for i in range(PGD_round):
+                print(f"NES_BLACK PGD iter {i+1}/{PGD_round}", end="\r")
+                # Use estimate_audio_gradient_nes, true_blackbox=True
+                audio_grad = self.estimate_audio_gradient_nes(perturbed_data, target_labels_device, n_queries, true_blackbox=True)
+                perturbed_data = self.pgd_attack(perturbed_data, data_raw, epsilon, alpha, audio_grad).detach()
+            print(" " * 70, end="\r")
+
+        elif attack_type == "NES_SPECTROGRAM_PGD": # Black-box spectrogram perturbation PGD
+            print("Performing NES_SPECTROGRAM_PGD attack...")
+            for i in range(PGD_round):
+                print(f"NES_SPECTROGRAM PGD iter {i+1}/{PGD_round}", end="\r")
+                # 1. Estimate d(L)/d(Spec_unpermuted)
+                # sigma_spec might need tuning for attacks
+                estimated_grad_wrt_norm_log_mag = self.estimate_spectrogram_gradient_nes(perturbed_data, target_labels_device, n_queries, sigma_spec=0.1)
+                
+                # 2. Propagate this to d(L)/d(Audio)
+                sound_for_grad_prop = perturbed_data.clone().detach().requires_grad_(True)
+                _, norm_log_mag_actual = torch_spectrogram(sound_for_grad_prop, self.torch_stft_func)
+                
+                # Zero existing grads before new backward, if any (though sound_for_grad_prop is fresh)
+                if sound_for_grad_prop.grad is not None:
+                    sound_for_grad_prop.grad.zero_()
+                
+                norm_log_mag_actual.backward(gradient=estimated_grad_wrt_norm_log_mag)
+                audio_grad_for_attack = sound_for_grad_prop.grad
+                
+                if audio_grad_for_attack is None:
+                    print("\nWarning: Audio gradient is None after spec grad propagation. Skipping PGD step.")
+                    audio_grad_for_attack = torch.zeros_like(perturbed_data) # Fallback to zero gradient
+                else:
+                    audio_grad_for_attack = audio_grad_for_attack.clone()
+                
+                # 3. Use this d(L)/d(Audio) in PGD/FGSM.
+                perturbed_data = self.pgd_attack(perturbed_data.detach(), data_raw, epsilon, alpha, audio_grad_for_attack)
+            print(" " * 70, end="\r")
+        else:
+            print(f"Attack type '{attack_type}' is not recognized or fully implemented. Performing no attack.")
+            # perturbed_data remains original sound if attack type not matched
+
+        # Final evaluation
+        spec_for_model_adv, _ = torch_spectrogram(perturbed_data.detach(), self.torch_stft_func)
+        input_sizes_adv = torch.IntTensor([spec_for_model_adv.size(2)]).int().to(self.device)
+        out_adv, output_sizes_adv = self.model(spec_for_model_adv, input_sizes_adv)
+        decoded_output_adv, _ = self.decoder.decode(out_adv, output_sizes_adv)
+        final_output = decoded_output_adv[0][0] if decoded_output_adv and decoded_output_adv[0] else ""
         
-        perturbed_data = perturbed_data.detach()
-        abs_ori = 20*np.log10(np.sqrt(np.mean(np.absolute(data_raw.cpu().numpy())**2)))
-        abs_after = 20*np.log10(np.sqrt(np.mean(np.absolute(perturbed_data.cpu().numpy())**2)))
-        db_difference = abs_after-abs_ori
+        db_difference = 0.0
+        if torch.mean(torch.absolute(data_raw)**2) > 1e-12:
+            abs_ori = 20*torch.log10(torch.sqrt(torch.mean(torch.absolute(data_raw)**2)) + 1e-9) # Add epsilon for log
+            abs_after = 20*torch.log10(torch.sqrt(torch.mean(torch.absolute(perturbed_data.detach())**2)) + 1e-9) # Add epsilon for log
+            db_difference = (abs_after-abs_ori).item()
+        else:
+            print("Warning: Original audio power is near zero, cannot compute dB difference accurately.")
+
         l_distance = Levenshtein.distance(self.target_string, final_output)
+        # Make sure final_output is a string
+        final_output_str = str(final_output) if final_output is not None else ""
+        print(f"\nFinal Original Prediction: {original_output}")
+        print(f"Target Sentence: {self.target_string}")
         print(f"Max Decibel Difference: {db_difference:.4f}")
-        print(f"Adversarial prediction: {decoded_output[0][0]}")
-        print(f"Levenshtein Distance {l_distance}")
+        print(f"Adversarial Prediction: {final_output_str}")
+        print(f"Levenshtein Distance: {l_distance}")
+        
         if self.save:
-            torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)
-        self.perturbed_data = perturbed_data
-        return db_difference, l_distance, self.target_string, final_output
+            save_file = f"{self.save}_{attack_type}.wav"
+            try:
+                torchaudio.save(save_file, src=perturbed_data.cpu().detach(), sample_rate=self.sample_rate)
+                print(f"Saved adversarial audio to {save_file}")
+            except Exception as e:
+                print(f"Error saving audio file {save_file}: {e}")
+        self.perturbed_data = perturbed_data.cpu().detach() # Store for potential get_adv_spec
+        return db_difference, l_distance, self.target_string, final_output_str

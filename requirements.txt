@@ -1,0 +1,13 @@
+torch==1.11.0
+numpy==1.21.0
+librosa==0.8.0
+pytorch-lightning==1.2.0
+torchaudio
+soundfile
+hydra-core
+Levenshtein
+numba==0.56.4
+matplotlib==3.3.3
+
+# I had to mess around with a lot of versions because the og repo had NO info about what they used.
+# this is mostly derived from the fact that they made this in jan 2021 (and to make things worse, python 3.10 was only released in oct 2021)

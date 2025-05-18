@@ -95,11 +95,12 @@ class Attacker:
     
     # estimate gradient using NES black-box approach for audio
     def estimate_gradient(self, sound, target, n_queries=25, true_blackbox=False):
-        sigma = 0.02  # noise standard deviation
+        sigma = 0.05  # noise standard deviation
         grad = torch.zeros_like(sound)
+        print(f"sound shape: {sound.shape}")
         
         for i in range(n_queries):
-            print(f"    NES gradient estimation: query {i+1}/{n_queries}", end="\r") # show progress on direction guess queries for gradient estimation
+            print(f"NES gradient estimation: query {i+1}/{n_queries}", end="\r") # show progress on direction guess queries for gradient estimation
             
             # sample random direction
             u_i = torch.randn_like(sound)
@@ -153,6 +154,43 @@ class Attacker:
         # distance being high is bad here so we can treat it as a loss of sorts
         return distance
 
+    # mostly ai generated. just for testing if our gradient estimation was used
+    # this is not used in any actual attacks
+    def _compare_gradients(self, sound, n_queries=25):
+        """Compare NES estimated gradient with actual gradient"""
+        sound_copy = sound.clone().detach()
+        sound_copy.requires_grad = True
+        
+        # Compute actual gradient with backprop
+        spec = torch_spectrogram(sound_copy, self.torch_stft)
+        input_sizes = torch.IntTensor([spec.size(3)]).int()
+        out, output_sizes = self.model(spec, input_sizes)
+        out = out.transpose(0, 1)  # TxNxH
+        out = out.log_softmax(2)
+        loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
+        
+        self.model.zero_grad()
+        loss.backward()
+        actual_grad = sound_copy.grad.data
+        
+        # Compute estimated gradient with NES
+        estimated_grad = self.estimate_gradient(sound, self.target, n_queries)
+        
+        # Compare gradients
+        cos_sim = torch.nn.functional.cosine_similarity(
+            actual_grad.flatten(), estimated_grad.flatten(), dim=0)
+        
+        # Compare signs
+        actual_sign = actual_grad.sign()
+        estimated_sign = estimated_grad.sign()
+        sign_agreement = (actual_sign == estimated_sign).float().mean()
+        
+        print(f"Gradient comparison:")
+        print(f"  Cosine similarity: {cos_sim.item():.4f} (closer to 1 is better)")
+        print(f"  Sign agreement: {sign_agreement.item():.4f} (percentage of matching signs)")
+        
+        return cos_sim.item(), sign_agreement.item()
+
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
         
@@ -167,7 +205,15 @@ class Attacker:
         original_output = decoded_output[0][0]
         print(f"Original prediction: {original_output}")
         
-        # BLACK BOX ATTACK
+        # TEST GRADIENT ESTIMATION
+        if attack_type == "TEST_BB":
+            # test how well we estimate gradient using NES
+            self._compare_gradients(data, n_queries)
+            perturbed_data = data
+        
+        # BLACK BOX ATTACKS
+        
+        # NES_GREY: we can peek at logits but we don't have access to the model
         if attack_type == "NES_GREY":
             # we'll assume that we only want pgd in this case 
             for i in range(PGD_round):
@@ -200,6 +246,8 @@ class Attacker:
             self.model.zero_grad()
             loss.backward()
             data_grad = data.grad.data
+            
+            print(f"data grad shape: {data_grad.shape}")
 
             perturbed_data = self.fgsm_attack(data, epsilon, data_grad)
 

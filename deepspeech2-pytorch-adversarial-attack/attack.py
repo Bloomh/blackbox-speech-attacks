@@ -109,6 +109,7 @@ class Attacker:
         
         # ATTACK
         ############ ATTACK GENERATION ##############
+        levenshtein_distances = []
         if attack_type == "FGSM":
             data.requires_grad = True
             
@@ -142,6 +143,15 @@ class Attacker:
                 data_grad = data.grad.data
 
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+
+                # Decode current prediction and compute Levenshtein distance
+                spec_pred = torch_spectrogram(data, self.torch_stft)
+                input_sizes_pred = torch.IntTensor([spec_pred.size(3)]).int()
+                out_pred, output_sizes_pred = self.model(spec_pred, input_sizes_pred)
+                decoded_output_pred, _ = self.decoder.decode(out_pred, output_sizes_pred)
+                pred_str = decoded_output_pred[0][0]
+                lev_dist = Levenshtein.distance(self.target_string, pred_str)
+                levenshtein_distances.append(lev_dist)
             perturbed_data = data
         ############ ATTACK GENERATION ##############
 
@@ -163,4 +173,4 @@ class Attacker:
         if self.save:
             torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)
         self.perturbed_data = perturbed_data
-        return db_difference, l_distance, self.target_string, final_output
+        return db_difference, l_distance, self.target_string, final_output, levenshtein_distances

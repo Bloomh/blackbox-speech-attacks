@@ -24,6 +24,7 @@ if __name__ == "__main__":
     # plot parameters
     parser.add_argument('--plot_ori_spec', type=str, default="None", help='Path to save the original spectrogram')
     parser.add_argument('--plot_adv_spec', type=str, default="None", help='Path to save the adversarial spectrogram')
+    parser.add_argument('--distance_plot', type=str, default='distance_plot.png', help='Path to save the distance-over-time plot')
     args = parser.parse_args()
 
     cfg = TranscribeConfig
@@ -36,7 +37,19 @@ if __name__ == "__main__":
         args.output_wav = None
     attacker = Attacker(model=model, sound=sound, target=target_sentence, decoder=decoder, device=args.device, save=args.output_wav)
 
-    attacker.attack(epsilon = args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter)
+    db_diff, l_dist, target, final, levenshtein_distances = attacker.attack(epsilon = args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter)
+
+    # Plot and save Levenshtein distance over time if available
+    if levenshtein_distances and len(levenshtein_distances) > 0:
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.plot(levenshtein_distances)
+        plt.xlabel('Iteration')
+        plt.ylabel('Levenshtein Distance')
+        plt.title('Levenshtein Distance over PGD Iterations')
+        plt.tight_layout()
+        plt.savefig(args.distance_plot)
+        plt.close()
 
     if args.plot_ori_spec != "None":
         attacker.get_ori_spec(args.plot_ori_spec)

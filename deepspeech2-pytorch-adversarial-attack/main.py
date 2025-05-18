@@ -11,7 +11,7 @@ if __name__ == "__main__":
     # I/O parameters
     parser.add_argument('--input_wav', type=str, help='input wav. file')
     parser.add_argument('--output_wav', type=str, default='None', help='output adversarial wav. file')
-    parser.add_argument('--model_path', type=str, default='/root/school-stuff/ttic31110/black-box-speech-attack/models/librispeech/librispeech_pretrained_v2.pth', help='model pth path; please use absolute path')
+    parser.add_argument('--model_path', type=str, default='None', help='model pth path; please use absolute path')
     parser.add_argument('--device', type=str, default='cuda', help='device')
     
     # attack parameters

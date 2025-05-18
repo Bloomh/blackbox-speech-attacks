@@ -93,7 +93,45 @@ class Attacker:
 
         return sound
     
-    def attack(self, epsilon, alpha, attack_type = "FGSM", PGD_round=40):
+    def estimate_gradient(self, sound, target, n_queries=25):
+        """Estimate gradient using NES black-box approach for audio"""
+        sigma = 0.02  # noise standard deviation
+        grad = torch.zeros_like(sound)
+        
+        for i in range(n_queries):
+            print(f"    NES gradient estimation: query {i+1}/{n_queries}", end="\r") # show progress on direction guess queries for gradient estimation
+            
+            # sample random direction
+            u_i = torch.randn_like(sound)
+            
+            # query model at perturbed points
+            sound_plus = torch.clamp(sound + sigma * u_i, min=-1, max=1)
+            sound_minus = torch.clamp(sound - sigma * u_i, min=-1, max=1)
+            
+            # get loss for both perturbed points (using CTC loss)
+            loss_plus = self._compute_ctc_loss(sound_plus)
+            loss_minus = self._compute_ctc_loss(sound_minus)
+            
+            # update gradient estimate (effectively a weighted sum)
+            grad += (loss_plus - loss_minus) * u_i
+            
+        print(" " * 50, end="\r")  # clear the line after NES queries
+        return -grad / (2 * n_queries * sigma)
+
+    # compute CTC loss for audio - this is a helper for gradient estimation
+    def _compute_ctc_loss(self, sound):
+        with torch.no_grad(): # don't track gradient since we're still tied to the model - we wanna be entirely blackbox
+            # this is largely the same as PGD below
+            spec = torch_spectrogram(sound, self.torch_stft)
+            input_sizes = torch.IntTensor([spec.size(3)]).int()
+            out, output_sizes = self.model(spec, input_sizes)
+            out = out.transpose(0, 1)  # T x N x H
+            out = out.log_softmax(2)
+            loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
+        
+        return loss.item()
+
+    def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
         
         data, target = self.sound.to(self.device), self.target.to(self.device)
@@ -105,17 +143,28 @@ class Attacker:
         out, output_sizes = self.model(spec, input_sizes)
         decoded_output, decoded_offsets = self.decoder.decode(out, output_sizes)
         original_output = decoded_output[0][0]
-        print(f"Original prediction: {decoded_output[0][0]}")
+        print(f"Original prediction: {original_output}")
         
-        # ATTACK
-        ############ ATTACK GENERATION ##############
+        # BLACK BOX ATTACK
+        if attack_type == "NES":
+            # we'll assume that we only want pgd in this case 
+            for i in range(PGD_round):
+                print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
+                # estimate gradient using NES
+                data_grad = self.estimate_gradient(data, target, n_queries)
+                # now that ew've estimated gradient, everything should be the same as PGD
+                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+            perturbed_data = data
+
+        # WHITE-BOX ATTACKS (original code):
+        
         if attack_type == "FGSM":
             data.requires_grad = True
             
             spec = torch_spectrogram(data, self.torch_stft)
             input_sizes = torch.IntTensor([spec.size(3)]).int()
             out, output_sizes = self.model(spec, input_sizes)
-            out = out.transpose(0, 1)  # TxNxH
+            out = out.transpose(0, 1)  # T x N x H
             out = out.log_softmax(2)
             loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
             
@@ -143,8 +192,7 @@ class Attacker:
 
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
             perturbed_data = data
-        ############ ATTACK GENERATION ##############
-
+            
         # prediction of adversarial sound
         spec = torch_spectrogram(perturbed_data, self.torch_stft)
         input_sizes = torch.IntTensor([spec.size(3)]).int()

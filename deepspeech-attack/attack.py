@@ -40,12 +40,46 @@ def flatten_to_string(obj):
     else:
         return str(obj)
 
+def decode_model_output(model_version, decoder, out, output_sizes):
+    """
+    Decodes model output for either v1 or v2 DeepSpeech models.
+    Returns the decoded string.
+    """
+    if model_version == "v1":
+        # Transpose output to [T, N, H] as in test.py
+        out = out.transpose(0, 1)  # TxNxH
+        seq_length = out.size(0)
+        batch_size = out.size(1)
+        sizes = torch.IntTensor([seq_length] * batch_size)
+        decoded_output = decoder.decode(out, sizes)
+        return flatten_to_string(decoded_output[0][0])
+    else:
+        decoded_output, _ = decoder.decode(out, output_sizes)
+        return flatten_to_string(decoded_output[0][0])
+
+def run_model(model, model_version, spec, input_sizes):
+    """
+    Runs the correct forward pass for DeepSpeech v1 or v2 models.
+    Returns (out, output_sizes), where output_sizes is None for v1.
+    """
+    if model_version == "v1":
+        out = model(spec)
+        output_sizes = None
+        return out, output_sizes
+    else:
+        return model(spec, input_sizes)
+
 class Attacker:
-    def __init__(self, model, sound, target, decoder, sample_rate=16000, device="cpu", save=None, model_version="v2"):
+    def __init__(self, target_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, model_version="v2"):
         """
-        model: deepspeech model
+        target_model: deepspeech model we are attacking
         sound: raw sound data [-1 to +1] (read from torchaudio.load)
-        label: string
+        target: target string
+        target_decoder: decoder for target_model
+        sample_rate: sample rate of sound
+        device: device to run on
+        save: path to save adversarial sound
+        surrogate_decoder: decoder for surrogate model
         model_version: "v1" or "v2"
         """
         self.sound = sound
@@ -53,10 +87,11 @@ class Attacker:
         self.target_string = target
         self.target = target
         self.__init_target()
-        self.model = model
-        self.model.to(device)
-        self.model.train()
-        self.decoder = decoder
+        self.target_model = target_model
+        self.target_model.to(device)
+        self.target_model.train()
+        self.target_decoder = target_decoder
+        self.surrogate_decoder = surrogate_decoder
         self.criterion = nn.CTCLoss()
         self.device = device
         self.model_version = model_version
@@ -87,9 +122,9 @@ class Attacker:
     def _forward_model(self, spec, input_sizes=None):
         version = str(self.model_version).strip().lower()
         if version == "v2":
-            return self.model(spec, input_sizes)
+            return self.target_model(spec, input_sizes)
         elif version == "v1":
-            out = self.model(spec)
+            out = self.target_model(spec)
             # For v1, output_sizes is typically the time dimension of the output
             output_sizes = torch.IntTensor([out.size(1)] * out.size(0))  # batch size
             return out, output_sizes
@@ -164,7 +199,7 @@ class Attacker:
             spec = torch_spectrogram(sound, self.torch_stft)
             # Assuming spec is (B,C,Time,Freq) after permute, model needs Time for input_sizes
             input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
+            out, output_sizes = self.target_model(spec, input_sizes)
             out = out.transpose(0, 1).log_softmax(2)
             loss = self.criterion(out, target_labels, output_sizes, self.target_lengths)
         return loss.item()
@@ -175,8 +210,8 @@ class Attacker:
             spec = torch_spectrogram(sound, self.torch_stft)
             # Assuming spec is (B,C,Time,Freq) after permute
             input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
-            decoded_output, _ = self.decoder.decode(out, output_sizes)
+            out, output_sizes = self.target_model(spec, input_sizes)
+            decoded_output, _ = self.target_decoder.decode(out, output_sizes)
             transcription = decoded_output[0][0]
             distance = Levenshtein.distance(transcription, self.target_string)
         return distance
@@ -194,13 +229,13 @@ class Attacker:
             spec = torch_spectrogram(sound_copy, self.torch_stft)
             # Assuming spec is (B,C,Time,Freq) after permute
             input_sizes = torch.IntTensor([spec.size(2)]).int() # Corrected to use Time dimension
-            out, output_sizes = self.model(spec, input_sizes)
+            out, output_sizes = self.target_model(spec, input_sizes)
             out = out.transpose(0, 1).log_softmax(2)
             if torch.isnan(out).any():
                 print("WARNING: NaN values detected in model outputs for actual grad!")
                 out = torch.nan_to_num(out)
             loss = self.criterion(out, target_labels_device, output_sizes, self.target_lengths)
-            self.model.zero_grad()
+            self.target_model.zero_grad()
             loss.backward()
             if sound_copy.grad is not None:
                 actual_grad_temp = sound_copy.grad.data.clone()
@@ -275,19 +310,13 @@ class Attacker:
         spec = torch_spectrogram(data, self.torch_stft)
         input_sizes = torch.IntTensor([spec.size(3)]).int()
         # Model output
-        out, output_sizes = self._forward_model(spec, input_sizes)
-        if self.model_version == "v1":
-            # Transpose output to [T, N, H] as in test.py
-            out = out.transpose(0, 1)  # TxNxH
-            seq_length = out.size(0)
-            batch_size = out.size(1)
-            sizes = torch.IntTensor([seq_length] * batch_size)
-            decoded_output = self.decoder.decode(out, sizes)
-            original_output = flatten_to_string(decoded_output[0][0])
+        out, output_sizes = run_model(self.target_model, self.model_version, spec, input_sizes)
+        # Use unified decode function for surrogate
+        if self.surrogate_decoder:
+            original_output = decode_model_output(self.model_version, self.surrogate_decoder, out, output_sizes)
         else:
-            decoded_output, decoded_offsets = self.decoder.decode(out, output_sizes)
-            original_output = decoded_output[0][0]
-        print(f"Original prediction: {original_output}")
+            original_output = decode_model_output(self.model_version, self.target_decoder, out, output_sizes)
+        print(f"Original prediction (surrogate): {original_output}")
         
         # ...continue with attack logic...
 
@@ -330,7 +359,7 @@ class Attacker:
             out = out.log_softmax(2)
             loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
             
-            self.model.zero_grad()
+            self.target_model.zero_grad()
             loss.backward()
             data_grad = data.grad.data
             
@@ -350,7 +379,7 @@ class Attacker:
                 out = out.log_softmax(2)
                 loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
                 
-                self.model.zero_grad()
+                self.target_model.zero_grad()
                 loss.backward()
                 data_grad = data.grad.data
 
@@ -360,30 +389,30 @@ class Attacker:
         # prediction of adversarial sound
         spec = torch_spectrogram(perturbed_data, self.torch_stft)
         input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = self._forward_model(spec, input_sizes)
-        if self.model_version == "v1":
-            # Transpose output to [T, N, H] as in test.py
-            out = out.transpose(0, 1)  # TxNxH
-            seq_length = out.size(0)
-            batch_size = out.size(1)
-            sizes = torch.IntTensor([seq_length] * batch_size)
-            decoded_output = self.decoder.decode(out, sizes)
-            final_output = decoded_output[0][0]
-        else:
-            decoded_output, decoded_offsets = self.decoder.decode(out, output_sizes)
-            final_output = decoded_output[0][0]
-        
+        out, output_sizes = run_model(self.target_model, self.model_version, spec, input_sizes)
+        # --- Evaluate adversarial example using the target model+decoder ---
+        final_output_target = decode_model_output(self.model_version, self.target_decoder, out, output_sizes)
         perturbed_data = perturbed_data.detach()
         abs_ori = 20*np.log10(np.sqrt(np.mean(np.absolute(data_raw.cpu().numpy())**2)))
         abs_after = 20*np.log10(np.sqrt(np.mean(np.absolute(perturbed_data.cpu().numpy())**2)))
         db_difference = abs_after-abs_ori
         
-        final_output = flatten_to_string(final_output)
-        l_distance = Levenshtein.distance(self.target_string, final_output)
+        l_distance = Levenshtein.distance(self.target_string, final_output_target)
         print(f"Max Decibel Difference: {db_difference:.4f}")
-        print(f"Adversarial prediction: {final_output}")
-        print(f"Levenshtein Distance {l_distance}")
+
+        # Evaluate adversarial example on surrogate model (if available)
+        if self.surrogate_decoder:
+            spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
+            input_sizes = torch.IntTensor([spec.size(3)]).int()
+            out, output_sizes = run_model(self.target_model, self.model_version, spec, input_sizes)
+            surrogate_pred = decode_model_output(self.model_version, self.surrogate_decoder, out, output_sizes)
+            surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
+            print(f"[SURROGATE] Adversarial prediction: {surrogate_pred}")
+            print(f"[SURROGATE] Levenshtein Distance: {surrogate_distance}")
+
+        print(f"[TARGET] Adversarial prediction: {final_output_target}")
+        print(f"[TARGET] Levenshtein Distance: {l_distance}")
         if self.save:
             torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)
         self.perturbed_data = perturbed_data
-        return db_difference, l_distance, self.target_string, final_output
+        return db_difference, l_distance, self.target_string, final_output_target

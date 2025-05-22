@@ -38,9 +38,9 @@ if __name__ == "__main__":
     # I/O parameters
     parser.add_argument('--input_wav', type=str, help='input wav. file')
     parser.add_argument('--output_wav', type=str, default='None', help='output adversarial wav. file')
-    parser.add_argument('--model_path', type=str, default='None', help='model pth path; please use absolute path')
     parser.add_argument('--device', type=str, default='cuda', help='device')
     parser.add_argument('--surrogate_version', type=str, default='v1', choices=['v1', 'v2'], help='Which DeepSpeech version to use as the surrogate (v1 or v2)')
+    parser.add_argument('--target_version', type=str, default='v2', choices=['v1', 'v2'], help='Which DeepSpeech version to use as the target/main model (v1 or v2)')
     # attack parameters
     parser.add_argument('--target_sentence', type=str, default="HELLO WORLD", help='Please use uppercase')
     parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new -->] NES_GREY or NES_BLACK')
@@ -60,15 +60,24 @@ if __name__ == "__main__":
         args.output_wav = None
 
     # Load surrogate model (for attack)
-    model, decoder, labels = load_surrogate_model(args.surrogate_version, args.device)
+    surrogate_model, surrogate_decoder, _ = load_surrogate_model(args.surrogate_version, args.device)
+    # Load target model (for evaluation)
+    target_model, target_decoder, _ = load_surrogate_model(args.target_version, args.device)
 
     # Run attack
-    attacker = Attacker(model=model, sound=sound, target=target_sentence, decoder=decoder, device=args.device, save=args.output_wav, model_version=args.surrogate_version)
+    attacker = Attacker(
+        target_model=target_model,
+        sound=sound,
+        target=target_sentence,
+        target_decoder=target_decoder,
+        surrogate_decoder=surrogate_decoder,
+        device=args.device,
+        save=args.output_wav,
+        model_version=args.surrogate_version
+    )
     attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 
     if args.plot_ori_spec != "None":
         attacker.get_ori_spec(args.plot_ori_spec)
     if args.plot_adv_spec != "None":
         attacker.get_adv_spec(args.plot_adv_spec)
-
-    # TODO: use the model_path specified for evaluation of the final success

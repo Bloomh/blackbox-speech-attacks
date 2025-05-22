@@ -71,6 +71,8 @@ def run_model(model, model_version, spec, input_sizes):
 
 class Attacker:
     def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2"): 
+        self.target_distances = []
+        self.surrogate_distances = []
         """
         target_model: deepspeech model we are attacking
         sound: raw sound data [-1 to +1] (read from torchaudio.load)
@@ -363,6 +365,22 @@ class Attacker:
 
             perturbed_data = self.fgsm_attack(data, epsilon, data_grad)
 
+            # Evaluate after FGSM attack
+            # Target
+            spec_t = torch_spectrogram(perturbed_data, self.torch_stft)
+            input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
+            out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+            final_output_target = decode_model_output(self.target_version, self.target_decoder, out_t, output_sizes_t)
+            l_distance = Levenshtein.distance(self.target_string, final_output_target)
+            self.target_distances.append(l_distance)
+            # Surrogate
+            spec_s = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
+            input_sizes_s = torch.IntTensor([spec_s.size(3)]).int()
+            out_s, output_sizes_s = run_model(self.surrogate_model, self.surrogate_version, spec_s, input_sizes_s)
+            surrogate_pred = decode_model_output(self.surrogate_version, self.surrogate_decoder, out_s, output_sizes_s)
+            surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
+            self.surrogate_distances.append(surrogate_distance)
+
         elif attack_type == "PGD":
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
@@ -380,6 +398,22 @@ class Attacker:
                 data_grad = data.grad.data
 
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+
+                # Evaluate after each PGD step
+                # Target
+                spec_t = torch_spectrogram(data, self.torch_stft)
+                input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
+                out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+                final_output_target = decode_model_output(self.target_version, self.target_decoder, out_t, output_sizes_t)
+                l_distance = Levenshtein.distance(self.target_string, final_output_target)
+                self.target_distances.append(l_distance)
+                # Surrogate
+                spec_s = torch_spectrogram(data.to(self.device), self.torch_stft)
+                input_sizes_s = torch.IntTensor([spec_s.size(3)]).int()
+                out_s, output_sizes_s = run_model(self.surrogate_model, self.surrogate_version, spec_s, input_sizes_s)
+                surrogate_pred = decode_model_output(self.surrogate_version, self.surrogate_decoder, out_s, output_sizes_s)
+                surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
+                self.surrogate_distances.append(surrogate_distance)
             perturbed_data = data
             
         # prediction of adversarial sound (evaluate on target model)
@@ -408,4 +442,4 @@ class Attacker:
         if self.save:
             torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)
         self.perturbed_data = perturbed_data
-        return db_difference, l_distance, self.target_string, final_output_target
+        return db_difference, l_distance, self.target_string, final_output_target, self.target_distances, self.surrogate_distances

@@ -1,5 +1,5 @@
 import sys, os
-sys.path.append("../deepspeech.pytorch/")
+sys.path.append("../deepspeech.pytorch.v2/")
 from deepspeech_pytorch.configs.inference_config import TranscribeConfig
 from deepspeech_pytorch.utils import load_decoder, load_model
 from attack import Attacker

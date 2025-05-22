@@ -1,5 +1,5 @@
-[submodule "deepspeech.pytorch"]
-	path = deepspeech.pytorch
+[submodule "deepspeech.pytorch.v2"]
+	path = deepspeech.pytorch.v2
 	url = https://github.com/SeanNaren/deepspeech.pytorch.git
 	branch = 4cb209ae0092fb23d5b487478a28cb91ee9980af
 [submodule "deepspeech.pytorch.v1"]

@@ -67,13 +67,15 @@ if __name__ == "__main__":
     # Run attack
     attacker = Attacker(
         target_model=target_model,
+        surrogate_model=surrogate_model,
         sound=sound,
         target=target_sentence,
         target_decoder=target_decoder,
         surrogate_decoder=surrogate_decoder,
         device=args.device,
         save=args.output_wav,
-        model_version=args.surrogate_version
+        surrogate_version=args.surrogate_version,
+        target_version=args.target_version
     )
     attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 

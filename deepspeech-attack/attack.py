@@ -305,6 +305,9 @@ class Attacker:
 
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
+        # Ensure correct model modes for attack
+        self.surrogate_model.train()
+        self.target_model.eval()
         
         data, target = self.sound.to(self.device), self.target.to(self.device)
         data_raw = data.clone().detach()

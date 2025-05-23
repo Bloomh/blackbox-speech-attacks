@@ -5,7 +5,7 @@ from attack import Attacker
 
 def to_model_path(training_data, version):
     if version in ("v1", "v2"):
-        return f"../models/{training_data}/librispeech_pretrained_{version}.pth"
+        return f"../models/{training_data}/pretrained_{version}.pth"
     else:
         raise ValueError("Unknown DeepSpeech version")
 

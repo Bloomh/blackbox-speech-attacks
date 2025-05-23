@@ -1,3 +1,6 @@
-models/librispeech/librispeech_pretrained_v2.pth filter=lfs diff=lfs merge=lfs -text
-models/librispeech/librispeech_pretrained_v1.pth filter=lfs diff=lfs merge=lfs -text
+# models/librispeech/librispeech_pretrained_v2.pth filter=lfs diff=lfs merge=lfs -text
+# models/librispeech/librispeech_pretrained_v1.pth filter=lfs diff=lfs merge=lfs -text
+# models/librispeech/pretrained_v2.pth filter=lfs diff=lfs merge=lfs -text
+# models/librispeech/pretrained_v1.pth filter=lfs diff=lfs merge=lfs -text
+models/*/*.pth filter=lfs diff=lfs merge=lfs -text
 models/librispeech/*.pth filter=lfs diff=lfs merge=lfs -text

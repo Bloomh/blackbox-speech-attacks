@@ -70,7 +70,8 @@ def run_model(model, model_version, spec, input_sizes):
         return model(spec, input_sizes)
 
 class Attacker:
-    def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2"): 
+    def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", 
+                 ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None): 
         self.target_distances = []
         self.surrogate_distances = []
         """
@@ -105,7 +106,13 @@ class Attacker:
         win_length = int(self.sample_rate * 0.02)
         self.torch_stft = STFT(n_fft=n_fft , hop_length=hop_length, win_length=win_length ,  window='hamming', center=True, pad_mode='reflect', freeze_parameters=True, device=self.device)
         self.save = save
-    
+        
+        self.ensemble_versions=ensemble_versions
+        self.ensemble_training_sets=ensemble_training_sets
+        self.ensemble_models=[m for m, _, _ in ensemble_model_info]
+        self.ensemble_decoders=[d for _, d, _ in ensemble_model_info]
+        self.ensemble_weights = [1 / len(ensemble_model_info) for _ in ensemble_model_info] if not ensemble_weights else ensemble_weights
+
     def get_ori_spec(self, save=None):
         spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
         plt.imshow(spec.cpu().numpy()[0][0])
@@ -414,6 +421,36 @@ class Attacker:
                 surrogate_pred = decode_model_output(self.surrogate_version, self.surrogate_decoder, out_s, output_sizes_s)
                 surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
                 self.surrogate_distances.append(surrogate_distance)
+            perturbed_data = data
+        
+        elif attack_type == "ENSEMBLE":
+            # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
+            
+            for i in range(PGD_round):
+                print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
+                data.requires_grad = True
+                
+                spec = torch_spectrogram(data, self.torch_stft)
+                input_sizes = torch.IntTensor([spec.size(3)]).int()
+                
+                # do fgsm calculation on a list (or zip of parallel lists of models) and do a weighted avg on the losses
+                losses = []
+                for version, model in zip(self.ensemble_versions, self.ensemble_models):  
+                    out, output_sizes = self._forward_model(model, version, spec, input_sizes)
+                    out = out.transpose(0, 1)  # TxNxH
+                    out = out.log_softmax(2)
+                    losses.append(self.criterion(out, self.target, output_sizes, self.target_lengths))
+                    model.zero_grad()
+                
+                loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
+                loss.backward()
+                data_grad = data.grad.data
+
+                data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+            
+            # we can do iterative plotting stuff over here - I've left the surrogate logic in tact for testing however we want, but something is produced here now in any case!
+            # take a look at the class - I have all the info we might need per ensemble model (like the decoders) that we might need for this
+            
             perturbed_data = data
             
         # prediction of adversarial sound (evaluate on target model)

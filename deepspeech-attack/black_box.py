@@ -3,18 +3,18 @@ import argparse
 import torchaudio
 from attack import Attacker
 
-def version_to_model_path(version):
+def to_model_path(training_data, version):
     if version in ("v1", "v2"):
-        return f"../models/librispeech/librispeech_pretrained_{version}.pth"
+        return f"../models/{training_data}/librispeech_pretrained_{version}.pth"
     else:
         raise ValueError("Unknown DeepSpeech version")
 
-def load_surrogate_model(version, device):
+def load_surrogate_model(training_data, version, device):
     if version == "v1":
         sys.path.insert(0, "../deepspeech.pytorch.v1")
         from model import DeepSpeech as DeepSpeechV1
         from decoder import GreedyDecoder
-        model_path = version_to_model_path(version)
+        model_path = to_model_path(training_data, version)
         model = DeepSpeechV1.load_model(model_path)
         model = model.to(device)
         # v1 labels: check model._labels if available, else use default
@@ -24,7 +24,7 @@ def load_surrogate_model(version, device):
         sys.path.insert(0, "../deepspeech.pytorch.v2")
         from deepspeech_pytorch.utils import load_model, load_decoder
         from deepspeech_pytorch.configs.inference_config import TranscribeConfig
-        model_path = version_to_model_path(version)
+        model_path = to_model_path(training_data, version)
         model = load_model(device=device, model_path=model_path, use_half=False)
         cfg = TranscribeConfig
         decoder = load_decoder(labels=model.labels, cfg=cfg.lm)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_version', type=str, default='v2', choices=['v1', 'v2'], help='Which DeepSpeech version to use as the target/main model (v1 or v2)')
     # attack parameters
     parser.add_argument('--target_sentence', type=str, default="HELLO WORLD", help='Please use uppercase')
-    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new -->] NES_GREY or NES_BLACK')
+    parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new -->] NES_GREY or NES_BLACK or ENSEMBLE') # we'll manually have to edit the multi-model inputs below for ensemble attacks
     parser.add_argument('--epsilon', type=float, default=0.25, help='epsilon')
     parser.add_argument('--alpha', type=float, default=1e-3, help='alpha')
     parser.add_argument('--PGD_iter', type=int, default=50, help='PGD iteration times')
@@ -60,9 +60,16 @@ if __name__ == "__main__":
         args.output_wav = None
 
     # Load surrogate model (for attack)
-    surrogate_model, surrogate_decoder, _ = load_surrogate_model(args.surrogate_version, args.device)
+    surrogate_model, surrogate_decoder, _ = load_surrogate_model("librispeech", args.surrogate_version, args.device)
     # Load target model (for evaluation)
-    target_model, target_decoder, _ = load_surrogate_model(args.target_version, args.device)
+    target_model, target_decoder, _ = load_surrogate_model("librispeech", args.target_version, args.device)
+    
+    # ENSEMBLE INIT
+    
+    # if the attack mode has been specified as ENSEMBLE, manually modify ensemble here.
+    ensemble_versions = ["v1", "v2"] # we might have more of each if we get pretrained models on diff datasets
+    ensemble_training_sets = ["librispeech", "librispeech"]
+    
 
     # Run attack
     attacker = Attacker(
@@ -75,7 +82,11 @@ if __name__ == "__main__":
         device=args.device,
         save=args.output_wav,
         surrogate_version=args.surrogate_version,
-        target_version=args.target_version
+        target_version=args.target_version,
+        ensemble_versions=ensemble_versions,
+        ensemble_training_sets=ensemble_training_sets,
+        ensemble_model_info=[load_surrogate_model(trainset, version, args.device) for trainset, version in zip(ensemble_training_sets, ensemble_versions)],
+        ensemble_weights=None
     )
     db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances = attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 

@@ -1,5 +1,64 @@
 ### refeerence code on implementing NES from Kathir's hw - doesn't run, don't try ###
 
+def part_3(
+    img: Image,
+    target_class: int,
+    ensemble_model_1: vgg19,
+    ensemble_model_2: vgg19,
+    ensemble_model_3: vgg19,
+    device: str | torch.device
+) -> Image:
+    # convert and initialize input (allow grad calc w respect to x)
+    og_input_tensor: torch.Tensor = img2tensorVGG(img, device)
+    x = og_input_tensor.clone().detach()
+    x.requires_grad = True
+    
+    # consts
+    perturbation_budget = 8 / 255 * (1 - 0) # we get 8 RGB vals of room per channel on the -1 to 1 scale
+    num_iters = 50
+    epsilon = 1/500
+    loss_func = torch.nn.CrossEntropyLoss()
+    
+    # these weights might be better than most others (ran scripts for couple hours on combos summing to 1 and this did the best lol)
+    lw1 = 0.3
+    lw2 = 0.2
+    lw3 = 0.5
+    
+    for _ in range(num_iters):
+    
+        # fwd pass and turn into batch format for loss
+        output_1: torch.Tensor = ensemble_model_1(x)
+        output_2: torch.Tensor = ensemble_model_2(x)
+        output_3: torch.Tensor = ensemble_model_3(x)
+        output_1.unsqueeze(0)
+        output_2.unsqueeze(0)
+        output_3.unsqueeze(0)
+    
+        # create single label and pass to loss
+        target_label = torch.tensor([target_class])
+        loss_1 = loss_func(output_1, target_label)
+        loss_3 = loss_func(output_2, target_label)
+        loss_2 = loss_func(output_3, target_label)
+        
+        # get weighted loss of our ensemble to use for x
+        loss = lw1 * loss_1 + lw2 * loss_2 + lw3 * loss_3
+    
+        # calculate loss gradient w respect to x
+        loss.backward(retain_graph=True)
+        gradient = x.grad
+        
+        # calculate perturbation (assuming now honeypot trap or we'd take p2 approach)
+        perturbation = -epsilon * gradient.sign()
+        
+        # (x + perturbation - og_input) is our overall perturbation; we clamp it according to budget
+        adjusted_perturbation = torch.clamp(x + perturbation - og_input_tensor, min=-perturbation_budget, max=perturbation_budget)
+        # add the "budget conscious" perturbation and clamp to avoid OOB channels
+        x = torch.clamp(og_input_tensor + adjusted_perturbation, min=-1, max=1)
+        # x is not a leaf tensor anymore here but we still want its gradient, so specify this.
+        x.retain_grad()
+    
+    return tensor2imgVGG(x)
+
 # helper - just put query logic into separate function - takes image and returns softmax probs
 def query(img, endpoint_url):
     # initial query model

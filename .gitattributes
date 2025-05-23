@@ -1,1 +1,2 @@
 models/librispeech/librispeech_pretrained_v2.pth filter=lfs diff=lfs merge=lfs -text
+models/librispeech/librispeech_pretrained_v1.pth filter=lfs diff=lfs merge=lfs -text

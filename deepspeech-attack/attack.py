@@ -94,7 +94,7 @@ class Attacker:
         self.__init_target()
         self.target_model = target_model
         self.target_model.to(device)
-        self.target_model.train()
+        self.target_model.eval()
         self.target_decoder = target_decoder
         self.surrogate_decoder = surrogate_decoder
         self.criterion = nn.CTCLoss()
@@ -110,6 +110,10 @@ class Attacker:
         self.ensemble_versions=ensemble_versions
         self.ensemble_training_sets=ensemble_training_sets
         self.ensemble_models=[m for m, _, _ in ensemble_model_info]
+        for model in self.ensemble_models:
+            model.to(device)
+            model.train()
+
         self.ensemble_decoders=[d for _, d, _ in ensemble_model_info]
         self.ensemble_weights = [1 / len(ensemble_model_info) for _ in ensemble_model_info] if not ensemble_weights else ensemble_weights
 

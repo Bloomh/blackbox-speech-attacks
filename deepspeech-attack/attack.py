@@ -430,8 +430,10 @@ class Attacker:
             perturbed_data = data
 
         elif attack_type == "ENSEMBLE":
-            # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
+            # Store per-model losses for plotting
+            ensemble_loss_histories = [[] for _ in self.ensemble_models]
 
+            # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 data.requires_grad = True
@@ -447,15 +449,15 @@ class Attacker:
                     out = out.log_softmax(2)
                     losses.append(self.criterion(out, self.target, output_sizes, self.target_lengths))
                     model.zero_grad()
+                # Store each model's loss for this round
+                for idx, loss_val in enumerate(losses):
+                    ensemble_loss_histories[idx].append(loss_val.item() if hasattr(loss_val, "item") else float(loss_val))
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
                 data_grad = data.grad.data
 
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
-
-            # we can do iterative plotting stuff over here - I've left the surrogate logic in tact for testing however we want, but something is produced here now in any case!
-            # take a look at the class - I have all the info we might need per ensemble model (like the decoders) that we might need for this
 
             perturbed_data = data
 
@@ -468,6 +470,22 @@ class Attacker:
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+
+            # Compute and plot losses for each ensemble model and the sum (what is optimized)
+            avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*ensemble_loss_histories)]
+
+            plt.figure(figsize=(10, 6))
+            for idx, (loss_history, training_set, version) in enumerate(zip(ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
+                plt.plot(loss_history, label=f"{training_set}_{version}", alpha=0.7)
+            plt.plot(avg_loss_history, label="Average Ensemble Loss", color="black", linewidth=3)
+            plt.xlabel("PGD Iteration")
+            plt.ylabel("Loss")
+            plt.title("Ensemble Model Losses During PGD Attack")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig("ensemble_losses.png")
+            plt.close()
+            print("Saved ensemble loss plot to ensemble_losses.png")
 
         # prediction of adversarial sound (evaluate on target model)
         spec = torch_spectrogram(perturbed_data, self.torch_stft)

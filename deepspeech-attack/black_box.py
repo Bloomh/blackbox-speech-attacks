@@ -62,13 +62,14 @@ if __name__ == "__main__":
     # Load surrogate model (for attack)
     surrogate_model, surrogate_decoder, _ = load_surrogate_model("librispeech", args.surrogate_version, args.device)
     # Load target model (for evaluation)
-    target_model, target_decoder, _ = load_surrogate_model("librispeech", args.target_version, args.device)
+    target_training_set = "librispeech"
+    target_model, target_decoder, _ = load_surrogate_model(target_training_set, args.target_version, args.device)
     
     # ENSEMBLE INIT
     
     # if the attack mode has been specified as ENSEMBLE, manually modify ensemble here.
-    ensemble_versions = ["v1", "v2"] # we might have more of each if we get pretrained models on diff datasets
-    ensemble_training_sets = ["librispeech", "librispeech"]
+    ensemble_versions = ["v1", "v2", "v2", "v1"] # we might have more of each if we get pretrained models on diff datasets
+    ensemble_training_sets = ["librispeech", "librispeech", "ted", "an4"]
     
 
     # Run attack
@@ -83,6 +84,7 @@ if __name__ == "__main__":
         save=args.output_wav,
         surrogate_version=args.surrogate_version,
         target_version=args.target_version,
+        target_training_set=target_training_set,
         ensemble_versions=ensemble_versions,
         ensemble_training_sets=ensemble_training_sets,
         ensemble_model_info=[load_surrogate_model(trainset, version, args.device) for trainset, version in zip(ensemble_training_sets, ensemble_versions)],

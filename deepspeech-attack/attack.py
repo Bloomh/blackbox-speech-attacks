@@ -70,8 +70,8 @@ def run_model(model, model_version, spec, input_sizes):
         return model(spec, input_sizes)
 
 class Attacker:
-    def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", 
-                 ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None): 
+    def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", target_training_set="librispeech",
+                 ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None):
         self.target_distances = []
         self.surrogate_distances = []
         """
@@ -85,6 +85,7 @@ class Attacker:
         surrogate_decoder: decoder for surrogate model
         surrogate_version: "v1" or "v2" for surrogate model
         target_version: "v1" or "v2" for target model
+        target_training_set: "librispeech" or "ted" or "an4" for target model
         """
         self.surrogate_model = surrogate_model
         self.sound = sound
@@ -101,12 +102,13 @@ class Attacker:
         self.device = device
         self.surrogate_version = surrogate_version
         self.target_version = target_version
+        self.target_training_set = target_training_set
         n_fft = int(self.sample_rate * 0.02)
         hop_length = int(self.sample_rate * 0.01)
         win_length = int(self.sample_rate * 0.02)
         self.torch_stft = STFT(n_fft=n_fft , hop_length=hop_length, win_length=win_length ,  window='hamming', center=True, pad_mode='reflect', freeze_parameters=True, device=self.device)
         self.save = save
-        
+
         self.ensemble_versions=ensemble_versions
         self.ensemble_training_sets=ensemble_training_sets
         self.ensemble_models=[m for m, _, _ in ensemble_model_info]
@@ -154,39 +156,39 @@ class Attacker:
 
     # FGSM
     def fgsm_attack(self, sound, epsilon, data_grad):
-        
+
         # find direction of gradient
         sign_data_grad = data_grad.sign()
-        
+
         # add noise "epilon * direction" to the ori sound
         perturbed_sound = sound - epsilon * sign_data_grad
-        
+
         return perturbed_sound
-    
+
     # PGD
     def pgd_attack(self, sound, ori_sound, eps, alpha, data_grad) :
-        
+
         adv_sound = sound - alpha * data_grad.sign() # + -> - !!!
         eta = torch.clamp(adv_sound - ori_sound.data, min=-eps, max=eps)
         sound = ori_sound + eta
 
         return sound
-    
+
     # estimate gradient using NES black-box approach for audio
     def estimate_gradient(self, sound, target_labels, n_queries=25, true_blackbox=False):
         sigma = 0.05  # noise standard deviation
         grad = torch.zeros_like(sound)
         # print(f"sound shape: {sound.shape}") # Keep commented for now
         num_valid_queries = 0
-        
+
         for i in range(n_queries):
             print(f"NES gradient estimation: query {i+1}/{n_queries}", end="\r")
             u_i = torch.randn_like(sound)
             u_i = u_i / (torch.norm(u_i) + 1e-8) # Normalize perturbation
-            
+
             sound_plus = torch.clamp(sound + sigma * u_i, min=-1, max=1)
             sound_minus = torch.clamp(sound - sigma * u_i, min=-1, max=1)
-            
+
             if true_blackbox:
                 # _compute_distance uses self.target_string implicitly
                 loss_plus = self._compute_distance(sound_plus)
@@ -195,7 +197,7 @@ class Attacker:
                 # _compute_ctc_loss needs target_labels
                 loss_plus = self._compute_ctc_loss(sound_plus, target_labels)
                 loss_minus = self._compute_ctc_loss(sound_minus, target_labels)
-            
+
             if isinstance(loss_plus, float) and isinstance(loss_minus, float) and not (math.isnan(loss_plus) or math.isinf(loss_plus) or math.isnan(loss_minus) or math.isinf(loss_minus)):
                 grad += (loss_plus - loss_minus) * u_i
                 num_valid_queries +=1
@@ -218,7 +220,7 @@ class Attacker:
             out = out.transpose(0, 1).log_softmax(2)
             loss = self.criterion(out, target_labels, output_sizes, self.target_lengths)
         return loss.item()
-    
+
     def _compute_distance(self, sound):
         """Compute score for black-box attack using only final transcription"""
         with torch.no_grad():
@@ -265,35 +267,35 @@ class Attacker:
         except Exception as e:
             print(f"Error computing actual gradient: {e}")
             actual_grad = torch.nan_to_num(torch.zeros_like(sound)) # Ensure it's a tensor
-        
+
         print("Computing estimated gradient with NES (direct audio perturbation)...")
         estimated_grad_raw = self.estimate_gradient(sound, target_labels_device, n_queries)
         estimated_grad = torch.nan_to_num(estimated_grad_raw)
-        
+
         # Apply smoothing to both gradients
         # Kernel size 5, stride 1, padding 2 for same-size output
         # Ensure gradients are at least 3D for avg_pool1d: (N, C, L)
         actual_grad_smoothed = torch.nn.functional.avg_pool1d(actual_grad.view(1, 1, -1), kernel_size=5, stride=1, padding=2).view_as(actual_grad)
         estimated_grad_smoothed = torch.nn.functional.avg_pool1d(estimated_grad.view(1, 1, -1), kernel_size=5, stride=1, padding=2).view_as(estimated_grad)
-        
+
         actual_norm = torch.norm(actual_grad_smoothed)
         estimated_norm = torch.norm(estimated_grad_smoothed)
         print(f"Actual gradient norm (smoothed): {actual_norm.item():.6f}")
         print(f"Estimated gradient norm (smoothed): {estimated_norm.item():.6f}")
-        
+
         cos_sim = torch.tensor(0.0) # Default value
         if actual_norm > 1e-8 and estimated_norm > 1e-8: # Check for non-zero norms
             cos_sim = torch.nn.functional.cosine_similarity(actual_grad_smoothed.flatten(), estimated_grad_smoothed.flatten(), dim=0)
         else:
             print("WARNING: One or both smoothed gradients have near-zero norm. Cosine similarity set to 0.")
-        
+
         sign_agreement = torch.tensor(0.0)
         non_zero_mask = (actual_grad_smoothed.abs() > 1e-8) & (estimated_grad_smoothed.abs() > 1e-8)
         if non_zero_mask.sum() > 0:
             sign_agreement = (actual_grad_smoothed[non_zero_mask].sign() == estimated_grad_smoothed[non_zero_mask].sign()).float().mean()
         else:
             print("WARNING: No overlapping significant elements for sign agreement after smoothing.")
-        
+
         top_sign_agreement = torch.tensor(0.0)
         try:
             if actual_norm > 1e-8:
@@ -313,7 +315,7 @@ class Attacker:
         print(f"  Cosine similarity: {cos_sim.item():.4f}")
         print(f"  Overall sign agreement: {sign_agreement.item():.4f}")
         print(f"  Top 10% sign agreement: {top_sign_agreement.item():.4f}")
-        
+
         return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
@@ -321,7 +323,7 @@ class Attacker:
         # Ensure correct model modes for attack
         self.surrogate_model.train()
         self.target_model.eval()
-        
+
         data, target = self.sound.to(self.device), self.target.to(self.device)
         data_raw = data.clone().detach()
         # initial prediction (target model)
@@ -331,18 +333,18 @@ class Attacker:
         original_output = decode_model_output(self.target_version, self.target_decoder, out, output_sizes)
         print(f"Original prediction (target): {original_output}")
 
-        
+
         # TEST GRADIENT ESTIMATION
         if attack_type == "TEST_BB":
             # test how well we estimate gradient using NES
             self._compare_gradients(data, n_queries)
             perturbed_data = data
-        
+
         # BLACK BOX ATTACKS
-        
+
         # NES_GREY: we can peek at logits but we don't have access to the model
         if attack_type == "NES_GREY":
-            # we'll assume that we only want pgd in this case 
+            # we'll assume that we only want pgd in this case
             for i in range(PGD_round):
                 print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 # estimate gradient using NES
@@ -350,7 +352,7 @@ class Attacker:
                 # now that ew've estimated gradient, everything should be the same as PGD
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
             perturbed_data = data
-            
+
         elif attack_type == "NES_BLACK": # can't even use ctc loss because we don't have access to logits
             for i in range(PGD_round):
                 print(f"NES + PGD processing ...  {i+1} / {PGD_round}", end="\r")
@@ -359,7 +361,7 @@ class Attacker:
             perturbed_data = data
 
         # WHITE-BOX ATTACKS (original code):
-        
+
         if attack_type == "FGSM":
             data.requires_grad = True
             spec = torch_spectrogram(data, self.torch_stft)
@@ -396,14 +398,14 @@ class Attacker:
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 data.requires_grad = True
-                
+
                 spec = torch_spectrogram(data, self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
                 out, output_sizes = self._forward_model(self.surrogate_model, self.surrogate_version, spec, input_sizes)
                 out = out.transpose(0, 1)  # TxNxH
                 out = out.log_softmax(2)
                 loss = self.criterion(out, self.target, output_sizes, self.target_lengths)
-                
+
                 self.surrogate_model.zero_grad()
                 loss.backward()
                 data_grad = data.grad.data
@@ -426,37 +428,47 @@ class Attacker:
                 surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
                 self.surrogate_distances.append(surrogate_distance)
             perturbed_data = data
-        
+
         elif attack_type == "ENSEMBLE":
             # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
-            
+
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 data.requires_grad = True
-                
+
                 spec = torch_spectrogram(data, self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
-                
+
                 # do fgsm calculation on a list (or zip of parallel lists of models) and do a weighted avg on the losses
                 losses = []
-                for version, model in zip(self.ensemble_versions, self.ensemble_models):  
+                for version, model in zip(self.ensemble_versions, self.ensemble_models):
                     out, output_sizes = self._forward_model(model, version, spec, input_sizes)
                     out = out.transpose(0, 1)  # TxNxH
                     out = out.log_softmax(2)
                     losses.append(self.criterion(out, self.target, output_sizes, self.target_lengths))
                     model.zero_grad()
-                
+
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
                 data_grad = data.grad.data
 
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
-            
+
             # we can do iterative plotting stuff over here - I've left the surrogate logic in tact for testing however we want, but something is produced here now in any case!
             # take a look at the class - I have all the info we might need per ensemble model (like the decoders) that we might need for this
-            
+
             perturbed_data = data
-            
+
+            # Evaluate adversarial example on all ensemble models
+            for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
+                spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
+                input_sizes = torch.IntTensor([spec.size(3)]).int()
+                out, output_sizes = run_model(model, version, spec, input_sizes)
+                ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
+                ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
+                print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
+                print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+
         # prediction of adversarial sound (evaluate on target model)
         spec = torch_spectrogram(perturbed_data, self.torch_stft)
         input_sizes = torch.IntTensor([spec.size(3)]).int()
@@ -466,19 +478,11 @@ class Attacker:
         abs_ori = 20*np.log10(np.sqrt(np.mean(np.absolute(data_raw.cpu().numpy())**2)))
         abs_after = 20*np.log10(np.sqrt(np.mean(np.absolute(perturbed_data.cpu().numpy())**2)))
         db_difference = abs_after - abs_ori
-        print(f"[TARGET] Adversarial prediction: {final_output_target}")
+        print(f"[TARGET {self.target_training_set}_{self.target_version}] Adversarial prediction: {final_output_target}")
         l_distance = Levenshtein.distance(self.target_string, final_output_target)
-        print(f"[TARGET] Levenshtein Distance: {l_distance}")
+        print(f"[TARGET {self.target_training_set}_{self.target_version}] Levenshtein Distance: {l_distance}")
         print(f"Max Decibel Difference: {db_difference:.4f}")
 
-        # Evaluate adversarial example on surrogate model
-        spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
-        input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = run_model(self.surrogate_model, self.surrogate_version, spec, input_sizes)
-        surrogate_pred = decode_model_output(self.surrogate_version, self.surrogate_decoder, out, output_sizes)
-        surrogate_distance = Levenshtein.distance(self.target_string, surrogate_pred)
-        print(f"[SURROGATE] Adversarial prediction: {surrogate_pred}")
-        print(f"[SURROGATE] Levenshtein Distance: {surrogate_distance}")
 
         if self.save:
             torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)

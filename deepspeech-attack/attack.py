@@ -431,6 +431,7 @@ class Attacker:
 
         elif attack_type == "ENSEMBLE":
             # Store per-model losses for plotting
+            import csv
             ensemble_loss_histories = [[] for _ in self.ensemble_models]
 
             # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
@@ -465,11 +466,41 @@ class Attacker:
             for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
+
+                model.eval()
+                # Debug info
+                print(f"\n[DEBUG] Ensemble Model {i}:")
+                print(f"  Model object id: {id(model)}")
+                print(f"  Model mode: {'train' if model.training else 'eval'}")
+                print(f"  Model device: {next(model.parameters()).device if hasattr(model, 'parameters') else 'N/A'}")
+                print(f"  Model version: {version}")
+                print(f"  Model training set: {training_set}")
+                print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
                 out, output_sizes = run_model(model, version, spec, input_sizes)
                 ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+
+            # Debug for target model
+            print(f"\n[DEBUG] Target Model:")
+            print(f"  Model object id: {id(self.target_model)}")
+            print(f"  Model mode: {'train' if self.target_model.training else 'eval'}")
+            print(f"  Model device: {next(self.target_model.parameters()).device if hasattr(self.target_model, 'parameters') else 'N/A'}")
+            print(f"  Model version: {self.target_version}")
+            print(f"  Model training set: {self.target_training_set}")
+            print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
+
+            # Save ensemble loss histories to CSV
+            csv_filename = "ensemble_loss_histories.csv"
+            with open(csv_filename, "w", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)]
+                writer.writerow(header)
+                for row in zip(*ensemble_loss_histories):
+                    writer.writerow(row)
+            print(f"Saved ensemble loss histories to {csv_filename}")
+
 
             # Compute and plot losses for each ensemble model and the sum (what is optimized)
             avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*ensemble_loss_histories)]

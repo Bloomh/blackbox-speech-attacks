@@ -497,6 +497,12 @@ class Attacker:
                 print(f"  Model training set: {training_set}")
                 print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
                 out, output_sizes = run_model(model, version, spec, input_sizes)
+                # Debug: print decoder type and config
+                print(f"[DEBUG] Ensemble decoder type: {type(decoder)}")
+                try:
+                    print(f"[DEBUG] Ensemble decoder config: {vars(decoder)}")
+                except Exception as e:
+                    print(f"[DEBUG] Ensemble decoder config: <unavailable> ({e})")
                 ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
@@ -505,6 +511,12 @@ class Attacker:
 
             # Debug for target model
             # Debug: print input tensor hash and stats for target model
+            # Debug: print decoder type and config for target
+            print(f"[DEBUG] Target decoder type: {type(self.target_decoder)}")
+            try:
+                print(f"[DEBUG] Target decoder config: {vars(self.target_decoder)}")
+            except Exception as e:
+                print(f"[DEBUG] Target decoder config: <unavailable> ({e})")
             print(f"[DEBUG] Target input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
             print(f"[DEBUG] Target decoder id: {id(self.target_decoder)}")
 

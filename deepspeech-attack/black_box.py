@@ -115,18 +115,19 @@ if __name__ == "__main__":
     )
     db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances = attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 
-    # Plot and save Levenshtein distances over time
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 6))
-    plt.plot(target_distances, label='Target Model')
-    plt.plot(surrogate_distances, label='Surrogate Model')
-    plt.xlabel('Attack Step')
-    plt.ylabel('Levenshtein Distance')
-    plt.title('Levenshtein Distance Over Attack Steps')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig('levenshtein_plot.png')
-    plt.close()
+    if args.mode != "ENSEMBLE":
+        # Plot and save Levenshtein distances over time
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(10, 6))
+        plt.plot(target_distances, label='Target Model')
+        plt.plot(surrogate_distances, label='Surrogate Model')
+        plt.xlabel('Attack Step')
+        plt.ylabel('Levenshtein Distance')
+        plt.title('Levenshtein Distance Over Attack Steps')
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig('levenshtein_plot.png')
+        plt.close()
 
     if args.plot_ori_spec != "None":
         attacker.get_ori_spec(args.plot_ori_spec)

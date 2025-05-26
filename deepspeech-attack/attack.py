@@ -476,9 +476,16 @@ class Attacker:
             perturbed_data = data
 
             # Evaluate adversarial example on all ensemble models
+            import hashlib
             for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
+
+                # Debug: print input tensor hash and stats
+                def tensor_md5(tensor):
+                    return hashlib.md5(tensor.detach().cpu().numpy().tobytes()).hexdigest()
+                print(f"[DEBUG] Ensemble Model {i} input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
+                print(f"[DEBUG] Ensemble decoder id: {id(decoder)}")
 
                 model.eval()
                 # Debug info
@@ -495,7 +502,12 @@ class Attacker:
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
 
+
             # Debug for target model
+            # Debug: print input tensor hash and stats for target model
+            print(f"[DEBUG] Target input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
+            print(f"[DEBUG] Target decoder id: {id(self.target_decoder)}")
+
             print(f"\n[DEBUG] Target Model:")
             print(f"  Model object id: {id(self.target_model)}")
             print(f"  Model mode: {'train' if self.target_model.training else 'eval'}")

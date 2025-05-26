@@ -72,8 +72,8 @@ def run_model(model, model_version, spec, input_sizes):
 class Attacker:
     def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", target_training_set="librispeech",
                  ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None):
-        print(f"[MODEL LOAD] Target model: training_set={target_training_set}, version={target_version}")
-        print(f"[MODEL LOAD] Surrogate model: version={surrogate_version}")
+        # print(f"[MODEL LOAD] Target model: training_set={target_training_set}, version={target_version}")
+        # print(f"[MODEL LOAD] Surrogate model: version={surrogate_version}")
         if ensemble_training_sets is not None and ensemble_versions is not None:
             for i, (trainset, version) in enumerate(zip(ensemble_training_sets, ensemble_versions)):
                 print(f"[MODEL LOAD] Ensemble model {i}: training_set={trainset}, version={version}")
@@ -385,6 +385,7 @@ class Attacker:
 
             # Evaluate after FGSM attack
             # Target
+            self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
             spec_t = torch_spectrogram(perturbed_data, self.torch_stft)
             input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
             out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
@@ -419,6 +420,7 @@ class Attacker:
 
                 # Evaluate after each PGD step
                 # Target
+                self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
                 spec_t = torch_spectrogram(data, self.torch_stft)
                 input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
                 out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
@@ -461,10 +463,11 @@ class Attacker:
                     self.ensemble_loss_histories[idx].append(loss_val.item() if hasattr(loss_val, "item") else float(loss_val))
 
                 # Compute and store target model loss
-                out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
-                out_t = out_t.transpose(0, 1)
-                out_t = out_t.log_softmax(2)
-                target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
+                with torch.no_grad():
+                    out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
+                    out_t = out_t.transpose(0, 1)
+                    out_t = out_t.log_softmax(2)
+                    target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
                 self.target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
@@ -561,6 +564,7 @@ class Attacker:
             print("Saved ensemble loss plot to ensemble_losses.png")
 
         # prediction of adversarial sound (evaluate on target model)
+        self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
         spec = torch_spectrogram(perturbed_data, self.torch_stft)
         input_sizes = torch.IntTensor([spec.size(3)]).int()
         out, output_sizes = run_model(self.target_model, self.target_version, spec, input_sizes)

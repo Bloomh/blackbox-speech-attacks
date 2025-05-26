@@ -9,23 +9,46 @@ def to_model_path(training_data, version):
     else:
         raise ValueError("Unknown DeepSpeech version")
 
+import hashlib
+import torch
+
 def load_surrogate_model(training_data, version, device):
+    model_path = to_model_path(training_data, version)
+    print(f"[MODEL LOAD] Loading model: training_set={training_data}, version={version}, path={model_path}, device={device}")
     if version == "v1":
         sys.path.insert(0, "../deepspeech.pytorch.v1")
         from model import DeepSpeech as DeepSpeechV1
         from decoder import GreedyDecoder
-        model_path = to_model_path(training_data, version)
+        # Hash the weights file directly
+        with open(model_path, 'rb') as f:
+            file_bytes = f.read()
+            file_hash = hashlib.md5(file_bytes).hexdigest()
+        print(f"[MODEL LOAD] Weights file hash (md5): {file_hash}")
         model = DeepSpeechV1.load_model(model_path)
         model = model.to(device)
         # v1 labels: check model._labels if available, else use default
         labels = getattr(model, '_labels', " abcdefghijklmnopqrstuvwxyz'")
         decoder = GreedyDecoder(labels)
+        # Hash the loaded state_dict
+        state_bytes = torch.save(model.state_dict(), None)
+        state_hash = hashlib.md5(state_bytes.getvalue()).hexdigest()
+        print(f"[MODEL LOAD] Loaded state_dict hash (md5): {state_hash}")
     elif version == "v2":
         sys.path.insert(0, "../deepspeech.pytorch.v2")
         from deepspeech_pytorch.utils import load_model, load_decoder
         from deepspeech_pytorch.configs.inference_config import TranscribeConfig
-        model_path = to_model_path(training_data, version)
+        # Hash the weights file directly
+        with open(model_path, 'rb') as f:
+            file_bytes = f.read()
+            file_hash = hashlib.md5(file_bytes).hexdigest()
+        print(f"[MODEL LOAD] Weights file hash (md5): {file_hash}")
         model = load_model(device=device, model_path=model_path, use_half=False)
+        # Hash the loaded state_dict
+        import io
+        buffer = io.BytesIO()
+        torch.save(model.state_dict(), buffer)
+        state_hash = hashlib.md5(buffer.getvalue()).hexdigest()
+        print(f"[MODEL LOAD] Loaded state_dict hash (md5): {state_hash}")
         cfg = TranscribeConfig
         decoder = load_decoder(labels=model.labels, cfg=cfg.lm)
         labels = model.labels

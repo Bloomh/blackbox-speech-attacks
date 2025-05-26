@@ -72,6 +72,11 @@ def run_model(model, model_version, spec, input_sizes):
 class Attacker:
     def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", target_training_set="librispeech",
                  ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None):
+        print(f"[MODEL LOAD] Target model: training_set={target_training_set}, version={target_version}")
+        print(f"[MODEL LOAD] Surrogate model: version={surrogate_version}")
+        if ensemble_training_sets is not None and ensemble_versions is not None:
+            for i, (trainset, version) in enumerate(zip(ensemble_training_sets, ensemble_versions)):
+                print(f"[MODEL LOAD] Ensemble model {i}: training_set={trainset}, version={version}")
         self.target_distances = []
         self.surrogate_distances = []
         """
@@ -433,6 +438,7 @@ class Attacker:
             # Store per-model losses for plotting
             import csv
             ensemble_loss_histories = [[] for _ in self.ensemble_models]
+            target_loss_history = []
 
             # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
             for i in range(PGD_round):
@@ -453,6 +459,13 @@ class Attacker:
                 # Store each model's loss for this round
                 for idx, loss_val in enumerate(losses):
                     ensemble_loss_histories[idx].append(loss_val.item() if hasattr(loss_val, "item") else float(loss_val))
+
+                # Compute and store target model loss
+                out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
+                out_t = out_t.transpose(0, 1)
+                out_t = out_t.log_softmax(2)
+                target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
+                target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
@@ -495,12 +508,11 @@ class Attacker:
             csv_filename = "ensemble_loss_histories.csv"
             with open(csv_filename, "w", newline="") as csvfile:
                 writer = csv.writer(csvfile)
-                header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)]
+                header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)] + [f"target_{self.target_training_set}_{self.target_version}"]
                 writer.writerow(header)
-                for row in zip(*ensemble_loss_histories):
+                for row in zip(*ensemble_loss_histories, target_loss_history):
                     writer.writerow(row)
             print(f"Saved ensemble loss histories to {csv_filename}")
-
 
             # Compute and plot losses for each ensemble model and the sum (what is optimized)
             avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*ensemble_loss_histories)]
@@ -509,9 +521,10 @@ class Attacker:
             for idx, (loss_history, training_set, version) in enumerate(zip(ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
                 plt.plot(loss_history, label=f"{training_set}_{version}", alpha=0.7)
             plt.plot(avg_loss_history, label="Average Ensemble Loss", color="black", linewidth=3)
+            plt.plot(target_loss_history, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
             plt.xlabel("PGD Iteration")
             plt.ylabel("Loss")
-            plt.title("Ensemble Model Losses During PGD Attack")
+            plt.title("Ensemble and Target Model Losses During PGD Attack")
             plt.legend()
             plt.tight_layout()
             plt.savefig("ensemble_losses.png")

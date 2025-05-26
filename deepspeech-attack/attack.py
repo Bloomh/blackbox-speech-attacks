@@ -6,6 +6,8 @@ import torchaudio
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import sys
+import os
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     out = []
@@ -476,10 +478,44 @@ class Attacker:
             perturbed_data = data
 
             # Evaluate adversarial example on all ensemble models
+            # Load fresh, clean model instances for proper evaluation
             import hashlib
+            sys.path.insert(0, "../deepspeech.pytorch.v1")
+            sys.path.insert(0, "../deepspeech.pytorch.v2")
+            
+            def load_clean_model(training_set, version, device):
+                """Load a fresh, clean model instance for evaluation"""
+                if version in ("v1", "v2"):
+                    model_path = f"../models/{training_set}/pretrained_{version}.pth"
+                else:
+                    raise ValueError("Unknown DeepSpeech version")
+                
+                if version == "v1":
+                    from model import DeepSpeech as DeepSpeechV1
+                    from decoder import GreedyDecoder
+                    model = DeepSpeechV1.load_model(model_path)
+                    model = model.to(device)
+                    model.eval()  # Set to eval mode immediately
+                    labels = getattr(model, '_labels', " abcdefghijklmnopqrstuvwxyz'")
+                    decoder = GreedyDecoder(labels)
+                elif version == "v2":
+                    from deepspeech_pytorch.utils import load_model, load_decoder
+                    from deepspeech_pytorch.configs.inference_config import TranscribeConfig
+                    model = load_model(device=device, model_path=model_path, use_half=False)
+                    model.eval()  # Set to eval mode immediately
+                    cfg = TranscribeConfig
+                    decoder = load_decoder(labels=model.labels, cfg=cfg.lm)
+                    labels = model.labels
+                
+                return model, decoder, labels
+            
             self.ensemble_preds = []
             self.ensemble_lev_dists = []
-            for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
+            for i, (training_set, version) in enumerate(zip(self.ensemble_training_sets, self.ensemble_versions)):
+                # Load a fresh, clean model instance for evaluation
+                print(f"[DEBUG] Loading fresh model instance for evaluation: {training_set}_{version}")
+                clean_model, clean_decoder, _ = load_clean_model(training_set, version, self.device)
+                
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
 
@@ -487,25 +523,24 @@ class Attacker:
                 def tensor_md5(tensor):
                     return hashlib.md5(tensor.detach().cpu().numpy().tobytes()).hexdigest()
                 print(f"[DEBUG] Ensemble Model {i} input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
-                print(f"[DEBUG] Ensemble decoder id: {id(decoder)}")
+                print(f"[DEBUG] Ensemble decoder id: {id(clean_decoder)}")
 
-                model.eval()
                 # Debug info
-                print(f"\n[DEBUG] Ensemble Model {i}:")
-                print(f"  Model object id: {id(model)}")
-                print(f"  Model mode: {'train' if model.training else 'eval'}")
-                print(f"  Model device: {next(model.parameters()).device if hasattr(model, 'parameters') else 'N/A'}")
+                print(f"\n[DEBUG] Clean Ensemble Model {i}:")
+                print(f"  Model object id: {id(clean_model)}")
+                print(f"  Model mode: {'train' if clean_model.training else 'eval'}")
+                print(f"  Model device: {next(clean_model.parameters()).device if hasattr(clean_model, 'parameters') else 'N/A'}")
                 print(f"  Model version: {version}")
                 print(f"  Model training set: {training_set}")
                 print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
-                out, output_sizes = run_model(model, version, spec, input_sizes)
+                out, output_sizes = run_model(clean_model, version, spec, input_sizes)
                 # Debug: print decoder type and config
-                print(f"[DEBUG] Ensemble decoder type: {type(decoder)}")
+                print(f"[DEBUG] Ensemble decoder type: {type(clean_decoder)}")
                 try:
-                    print(f"[DEBUG] Ensemble decoder config: {vars(decoder)}")
+                    print(f"[DEBUG] Ensemble decoder config: {vars(clean_decoder)}")
                 except Exception as e:
                     print(f"[DEBUG] Ensemble decoder config: <unavailable> ({e})")
-                ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
+                ensemble_pred = decode_model_output(version, clean_decoder, out, output_sizes)
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                 self.ensemble_preds.append(ensemble_pred)
                 self.ensemble_lev_dists.append(ensemble_distance)

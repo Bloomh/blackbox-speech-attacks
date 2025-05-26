@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, io
 import argparse
 import torchaudio
 from attack import Attacker
@@ -30,8 +30,9 @@ def load_surrogate_model(training_data, version, device):
         labels = getattr(model, '_labels', " abcdefghijklmnopqrstuvwxyz'")
         decoder = GreedyDecoder(labels)
         # Hash the loaded state_dict
-        state_bytes = torch.save(model.state_dict(), None)
-        state_hash = hashlib.md5(state_bytes.getvalue()).hexdigest()
+        buffer = io.BytesIO()
+        torch.save(model.state_dict(), buffer)
+        state_hash = hashlib.md5(buffer.getvalue()).hexdigest()
         print(f"[MODEL LOAD] Loaded state_dict hash (md5): {state_hash}")
     elif version == "v2":
         sys.path.insert(0, "../deepspeech.pytorch.v2")
@@ -44,7 +45,6 @@ def load_surrogate_model(training_data, version, device):
         print(f"[MODEL LOAD] Weights file hash (md5): {file_hash}")
         model = load_model(device=device, model_path=model_path, use_half=False)
         # Hash the loaded state_dict
-        import io
         buffer = io.BytesIO()
         torch.save(model.state_dict(), buffer)
         state_hash = hashlib.md5(buffer.getvalue()).hexdigest()

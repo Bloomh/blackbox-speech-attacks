@@ -437,8 +437,8 @@ class Attacker:
         elif attack_type == "ENSEMBLE":
             # Store per-model losses for plotting
             import csv
-            ensemble_loss_histories = [[] for _ in self.ensemble_models]
-            target_loss_history = []
+            self.ensemble_loss_histories = [[] for _ in self.ensemble_models]
+            self.target_loss_history = []
 
             # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
             for i in range(PGD_round):
@@ -458,14 +458,14 @@ class Attacker:
                     model.zero_grad()
                 # Store each model's loss for this round
                 for idx, loss_val in enumerate(losses):
-                    ensemble_loss_histories[idx].append(loss_val.item() if hasattr(loss_val, "item") else float(loss_val))
+                    self.ensemble_loss_histories[idx].append(loss_val.item() if hasattr(loss_val, "item") else float(loss_val))
 
                 # Compute and store target model loss
                 out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
                 out_t = out_t.transpose(0, 1)
                 out_t = out_t.log_softmax(2)
                 target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
-                target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
+                self.target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
@@ -477,6 +477,8 @@ class Attacker:
 
             # Evaluate adversarial example on all ensemble models
             import hashlib
+            self.ensemble_preds = []
+            self.ensemble_lev_dists = []
             for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
@@ -505,8 +507,11 @@ class Attacker:
                     print(f"[DEBUG] Ensemble decoder config: <unavailable> ({e})")
                 ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
+                self.ensemble_preds.append(ensemble_pred)
+                self.ensemble_lev_dists.append(ensemble_distance)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+
 
 
             # Debug for target model
@@ -534,18 +539,18 @@ class Attacker:
                 writer = csv.writer(csvfile)
                 header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)] + [f"target_{self.target_training_set}_{self.target_version}"]
                 writer.writerow(header)
-                for row in zip(*ensemble_loss_histories, target_loss_history):
+                for row in zip(*self.ensemble_loss_histories, self.target_loss_history):
                     writer.writerow(row)
             print(f"Saved ensemble loss histories to {csv_filename}")
 
             # Compute and plot losses for each ensemble model and the sum (what is optimized)
-            avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*ensemble_loss_histories)]
+            avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*self.ensemble_loss_histories)]
 
             plt.figure(figsize=(10, 6))
-            for idx, (loss_history, training_set, version) in enumerate(zip(ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
+            for idx, (loss_history, training_set, version) in enumerate(zip(self.ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
                 plt.plot(loss_history, label=f"{training_set}_{version}", alpha=0.7)
             plt.plot(avg_loss_history, label="Average Ensemble Loss", color="black", linewidth=3)
-            plt.plot(target_loss_history, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
+            plt.plot(self.target_loss_history, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
             plt.xlabel("PGD Iteration")
             plt.ylabel("Loss")
             plt.title("Ensemble and Target Model Losses During PGD Attack")

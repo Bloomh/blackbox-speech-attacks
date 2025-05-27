@@ -341,24 +341,41 @@ class Attacker:
         return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
     def attack(self, epsilon=None, alpha=None, attack_type="ENSEMBLE", PGD_round=10, n_queries=1000):
-        # Set all models to train mode for backward compatibility with cuDNN RNNs
-        self.target_model.train()
-        for model in self.ensemble_models:
-            model.train()
-        # Ensure BatchNorm stats remain frozen
-        freeze_batchnorm_stats(self.target_model)
-        for model in self.ensemble_models:
-            freeze_batchnorm_stats(model)
+        # --- DEBUG: Output model architectures ---
+        print("[DEBUG] Target model architecture:")
+        print(self.target_model)
+        for idx, (model, version, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_training_sets)):
+            print(f"[DEBUG] Ensemble model {idx} ({training_set}_{version}) architecture:")
+            print(model)
 
-        # Disable Dropout (make it behave as in eval) for all models
-        def disable_dropout(model):
+        # --- DEBUG: Set all Dropout and BatchNorm modules to eval mode ---
+        def set_dropout_batchnorm_eval(model):
             for module in model.modules():
-                if isinstance(module, torch.nn.Dropout):
-                    module.p = 0.0
-                    module.train(False)  # Ensures dropout is off even in train mode by setting to eval mode
-        disable_dropout(self.target_model)
+                if isinstance(module, (torch.nn.Dropout, torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
+                    module.eval()
+        set_dropout_batchnorm_eval(self.target_model)
         for model in self.ensemble_models:
-            disable_dropout(model)
+            set_dropout_batchnorm_eval(model)
+        print("[DEBUG] All Dropout and BatchNorm layers set to eval mode on all models.")
+
+        # # Set all models to train mode for backward compatibility with cuDNN RNNs
+        # self.target_model.train()
+        # for model in self.ensemble_models:
+        #     model.train()
+        # # Ensure BatchNorm stats remain frozen
+        # freeze_batchnorm_stats(self.target_model)
+        # for model in self.ensemble_models:
+        #     freeze_batchnorm_stats(model)
+
+        # # Disable Dropout (make it behave as in eval) for all models
+        # def disable_dropout(model):
+        #     for module in model.modules():
+        #         if isinstance(module, torch.nn.Dropout):
+        #             module.p = 0.0
+        #             module.train(False)  # Ensures dropout is off even in train mode by setting to eval mode
+        # disable_dropout(self.target_model)
+        # for model in self.ensemble_models:
+        #     disable_dropout(model)
 
         print("Start attack")
         # Ensure correct model modes for attack
@@ -522,12 +539,22 @@ class Attacker:
                 with torch.no_grad():
                     spec_t = torch_spectrogram(data, self.torch_stft)
                     input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
+                    # --- Evaluate with eval mode ---
                     self.target_model.eval()
-                    out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+                    out_t_eval, output_sizes_t_eval = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+                    final_output_target_eval = decode_model_output(self.target_version, self.target_decoder, out_t_eval, output_sizes_t_eval)
+                    l_distance_eval = Levenshtein.distance(self.target_string, final_output_target_eval)
+                    if not hasattr(self, 'target_distances_eval'):
+                        self.target_distances_eval = []
+                    self.target_distances_eval.append(l_distance_eval)
+                    # --- Evaluate with train mode ---
                     self.target_model.train()
-                    final_output_target = decode_model_output(self.target_version, self.target_decoder, out_t, output_sizes_t)
-                    l_distance = Levenshtein.distance(self.target_string, final_output_target)
-                    self.target_distances.append(l_distance)
+                    out_t_train, output_sizes_t_train = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+                    final_output_target_train = decode_model_output(self.target_version, self.target_decoder, out_t_train, output_sizes_t_train)
+                    l_distance_train = Levenshtein.distance(self.target_string, final_output_target_train)
+                    if not hasattr(self, 'target_distances_train'):
+                        self.target_distances_train = []
+                    self.target_distances_train.append(l_distance_train)
 
                 # Track ensemble model Levenshtein distances at each PGD step
                 if not hasattr(self, 'ensemble_lev_dists_hist'):
@@ -535,33 +562,48 @@ class Attacker:
                 for idx, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                     spec_e = torch_spectrogram(data.to(self.device), self.torch_stft)
                     input_sizes_e = torch.IntTensor([spec_e.size(3)]).int()
+                    # --- Evaluate with eval mode ---
                     model.eval()
-                    out_e, output_sizes_e = run_model(model, version, spec_e, input_sizes_e)
+                    out_e_eval, output_sizes_e_eval = run_model(model, version, spec_e, input_sizes_e)
+                    ensemble_pred_eval = decode_model_output(version, decoder, out_e_eval, output_sizes_e_eval)
+                    ensemble_distance_eval = Levenshtein.distance(self.target_string, ensemble_pred_eval)
+                    if not hasattr(self, 'ensemble_lev_dists_hist_eval'):
+                        self.ensemble_lev_dists_hist_eval = [[] for _ in self.ensemble_models]
+                    self.ensemble_lev_dists_hist_eval[idx].append(ensemble_distance_eval)
+                    # --- Evaluate with train mode ---
                     model.train()
-                    ensemble_pred = decode_model_output(version, decoder, out_e, output_sizes_e)
-                    ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
-                    self.ensemble_lev_dists_hist[idx].append(ensemble_distance)
+                    out_e_train, output_sizes_e_train = run_model(model, version, spec_e, input_sizes_e)
+                    ensemble_pred_train = decode_model_output(version, decoder, out_e_train, output_sizes_e_train)
+                    ensemble_distance_train = Levenshtein.distance(self.target_string, ensemble_pred_train)
+                    if not hasattr(self, 'ensemble_lev_dists_hist_train'):
+                        self.ensemble_lev_dists_hist_train = [[] for _ in self.ensemble_models]
+                    self.ensemble_lev_dists_hist_train[idx].append(ensemble_distance_train)
 
             perturbed_data = data.detach()
 
             # Plot Levenshtein distances as a line plot for target and each ensemble model
             import matplotlib.pyplot as plt
-            plt.figure(figsize=(10, 6))
-            # Target model distances
-            if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
-                plt.plot(self.target_distances, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
-            # Ensemble model distances (plot as lines, not horizontal)
-            if hasattr(self, 'ensemble_lev_dists_hist'):
-                for idx, (dists, ts, ver) in enumerate(zip(self.ensemble_lev_dists_hist, self.ensemble_training_sets, self.ensemble_versions)):
-                    plt.plot(dists, label=f"Ensemble {ts}_{ver}", linestyle=":", alpha=0.7)
+            plt.figure(figsize=(12, 8))
+            # Target model distances (eval and train)
+            if hasattr(self, 'target_distances_eval') and len(self.target_distances_eval) > 0:
+                plt.plot(self.target_distances_eval, label=f"Target {self.target_training_set}_{self.target_version} (eval)", color="red", linewidth=2, linestyle="--")
+            if hasattr(self, 'target_distances_train') and len(self.target_distances_train) > 0:
+                plt.plot(self.target_distances_train, label=f"Target {self.target_training_set}_{self.target_version} (train)", color="orange", linewidth=2, linestyle="-")
+            # Ensemble model distances (eval and train)
+            if hasattr(self, 'ensemble_lev_dists_hist_eval'):
+                for idx, (dists, ts, ver) in enumerate(zip(self.ensemble_lev_dists_hist_eval, self.ensemble_training_sets, self.ensemble_versions)):
+                    plt.plot(dists, label=f"Ensemble {ts}_{ver} (eval)", linestyle=":", alpha=0.7)
+            if hasattr(self, 'ensemble_lev_dists_hist_train'):
+                for idx, (dists, ts, ver) in enumerate(zip(self.ensemble_lev_dists_hist_train, self.ensemble_training_sets, self.ensemble_versions)):
+                    plt.plot(dists, label=f"Ensemble {ts}_{ver} (train)", linestyle="-.", alpha=0.7)
             plt.xlabel('PGD Iteration')
             plt.ylabel('Levenshtein Distance')
-            plt.title('Levenshtein Distance to Target Sentence (Adversarial Output)')
+            plt.title('Levenshtein Distance to Target Sentence (Adversarial Output): eval vs train mode')
             plt.legend()
             plt.tight_layout()
-            plt.savefig('levenshtein_distances_lineplot.png')
+            plt.savefig('levenshtein_distances_lineplot_eval_vs_train.png')
             plt.close()
-            print("Saved Levenshtein distance line plot to levenshtein_distances_lineplot.png")
+            print("Saved Levenshtein distance line plot to levenshtein_distances_lineplot_eval_vs_train.png")
 
             # Save target_distances to CSV
             if hasattr(self, 'target_distances') and len(self.target_distances) > 0:

@@ -526,9 +526,6 @@ class Attacker:
                     final_output_target = decode_model_output(self.target_version, self.target_decoder, out_t, output_sizes_t)
                     l_distance = Levenshtein.distance(self.target_string, final_output_target)
                     self.target_distances.append(l_distance)
-                    print(f"[PGD ITER {i+1}] Target model adversarial prediction: {final_output_target}")
-                    print(f"[PGD ITER {i+1}] Target model Levenshtein Distance: {l_distance}")
-                    print(f"[PGD ITER {i+1}] Adversarial input min/max: {data.min().item():.4f}/{data.max().item():.4f} (mean: {data.mean().item():.4f})")
 
                 # Track ensemble model Levenshtein distances at each PGD step
                 if not hasattr(self, 'ensemble_lev_dists_hist'):
@@ -540,8 +537,6 @@ class Attacker:
                     ensemble_pred = decode_model_output(version, decoder, out_e, output_sizes_e)
                     ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                     self.ensemble_lev_dists_hist[idx].append(ensemble_distance)
-                    print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} prediction: {ensemble_pred}")
-                    print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} Levenshtein Distance: {ensemble_distance}")
 
             perturbed_data = data.detach()
 

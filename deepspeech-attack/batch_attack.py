@@ -84,7 +84,7 @@ def run_batch_ensemble_attacks(
                 )
                 # Run attack
                 out = attacker.attack(
-                    epsilon=attack_params.get('epsilon', 0.03),
+                    epsilon=attack_params.get('epsilon', 0.3),
                     alpha=attack_params.get('alpha', 0.001),
                     attack_type="ENSEMBLE",
                     PGD_round=attack_params.get('PGD_iter', 40),

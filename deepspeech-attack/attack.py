@@ -543,6 +543,8 @@ class Attacker:
                     print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} prediction: {ensemble_pred}")
                     print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} Levenshtein Distance: {ensemble_distance}")
 
+            perturbed_data = data.detach()
+
             # Plot Levenshtein distances as a line plot for target and each ensemble model
             import matplotlib.pyplot as plt
             plt.figure(figsize=(10, 6))

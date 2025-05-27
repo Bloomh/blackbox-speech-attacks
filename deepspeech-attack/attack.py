@@ -10,7 +10,10 @@ import hashlib
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     out = []
-    for word in sentence:
+    for idx, word in enumerate(sentence):
+        if word not in labels:
+            print(f"[WARNING] Character '{word}' at position {idx} in sentence '{sentence}' not in labels: {labels}. Skipping.")
+            continue
         out.append(labels.index(word))
     return torch.IntTensor(out)
 

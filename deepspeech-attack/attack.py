@@ -466,6 +466,14 @@ class Attacker:
             self.target_loss_history = []
 
             # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
+            def print_model_mode_and_bn_stats(model, label):
+                print(f"[DEBUG] {label} model training: {model.training}")
+                for name, module in model.named_modules():
+                    if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+                        print(f"[DEBUG] {label} {name} running_mean[0]: {module.running_mean[0].item()}, running_var[0]: {module.running_var[0].item()}, track_running_stats: {module.track_running_stats}, training: {module.training}")
+                    if isinstance(module, torch.nn.Dropout):
+                        print(f"[DEBUG] {label} {name} Dropout p: {module.p}, training: {module.training}")
+
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 data.requires_grad = True
@@ -479,6 +487,8 @@ class Attacker:
                     out, output_sizes = self._forward_model(model, version, spec, input_sizes)
                     out = out.transpose(0, 1)  # TxNxH
                     out = out.log_softmax(2)
+                    print_model_mode_and_bn_stats(model, f"Ensemble {version}")
+                    print(f"[DEBUG] Ensemble {version} output sample: {out.flatten()[:5]}")
                     losses.append(self.criterion(out, self.target, output_sizes, self.target_lengths))
                     model.zero_grad()
                 # Store each model's loss for this round
@@ -490,8 +500,23 @@ class Attacker:
                     out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
                     out_t = out_t.transpose(0, 1)
                     out_t = out_t.log_softmax(2)
+                    print_model_mode_and_bn_stats(self.target_model, "Target")
+                    print(f"[DEBUG] Target output sample: {out_t.flatten()[:5]}")
                     target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
                 self.target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
+
+                # Debug: Compare target loss to matching ensemble model loss
+                try:
+                    idx = next(
+                        i for i, (ts, ver) in enumerate(zip(self.ensemble_training_sets, self.ensemble_versions))
+                        if ts == self.target_training_set and ver == self.target_version
+                    )
+                    matching_ensemble_loss = losses[idx]
+                    print(f"[DEBUG] Target loss (eval): {target_loss.item():.6f}")
+                    print(f"[DEBUG] Ensemble loss (during PGD): {matching_ensemble_loss.item():.6f}")
+                    print(f"[DEBUG] Losses identical: {torch.allclose(target_loss, matching_ensemble_loss, atol=1e-6)}")
+                except StopIteration:
+                    print('[DEBUG] No matching ensemble model for target model found!')
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
@@ -621,14 +646,14 @@ class Attacker:
             spec = torch_spectrogram(perturbed_data, self.torch_stft)
             input_sizes = torch.IntTensor([spec.size(3)]).int()
             out, output_sizes = run_model(self.target_model, self.target_version, spec, input_sizes)
-            
+
             # Debug: Compare with ensemble output if available
             if hasattr(self, 'ensemble_raw_out'):
                 print(f"[DEBUG] Target raw output shape: {out.shape}")
                 print(f"[DEBUG] Target raw output hash: {hashlib.md5(out.detach().cpu().numpy().tobytes()).hexdigest()}")
                 print(f"[DEBUG] Raw outputs identical: {torch.allclose(out, self.ensemble_raw_out, atol=1e-6)}")
                 print(f"[DEBUG] Output sizes identical: {torch.equal(output_sizes, self.ensemble_output_sizes)}")
-            
+
             final_output_target = decode_model_output(self.target_version, self.target_decoder, out, output_sizes)
         perturbed_data = perturbed_data.detach()
         abs_ori = 20*np.log10(np.sqrt(np.mean(np.absolute(data_raw.cpu().numpy())**2)))

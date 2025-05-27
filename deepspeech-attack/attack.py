@@ -6,6 +6,7 @@ import torchaudio
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import hashlib
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     out = []
@@ -68,6 +69,18 @@ def run_model(model, model_version, spec, input_sizes):
         return out, output_sizes
     else:
         return model(spec, input_sizes)
+
+def freeze_batchnorm_stats(model):
+    """Freeze BatchNorm running statistics to prevent them from being updated during forward passes."""
+    for module in model.modules():
+        if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+            module.track_running_stats = False
+
+def unfreeze_batchnorm_stats(model):
+    """Unfreeze BatchNorm running statistics."""
+    for module in model.modules():
+        if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+            module.track_running_stats = True
 
 class Attacker:
     def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", target_training_set="librispeech",
@@ -328,6 +341,11 @@ class Attacker:
         # Ensure correct model modes for attack
         self.surrogate_model.train()
         self.target_model.eval()
+        
+        # Freeze BatchNorm running statistics to prevent models from diverging
+        freeze_batchnorm_stats(self.target_model)
+        for model in self.ensemble_models:
+            freeze_batchnorm_stats(model)
 
         data, target = self.sound.to(self.device), self.target.to(self.device)
         data_raw = data.clone().detach()
@@ -386,6 +404,7 @@ class Attacker:
             # Evaluate after FGSM attack
             # Target
             self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
+            self.target_model.zero_grad()  # Clear any accumulated gradients
             spec_t = torch_spectrogram(perturbed_data, self.torch_stft)
             input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
             out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
@@ -421,6 +440,7 @@ class Attacker:
                 # Evaluate after each PGD step
                 # Target
                 self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
+                self.target_model.zero_grad()  # Clear any accumulated gradients
                 spec_t = torch_spectrogram(data, self.torch_stft)
                 input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
                 out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
@@ -479,9 +499,21 @@ class Attacker:
             perturbed_data = data
 
             # Evaluate adversarial example on all ensemble models
-            import hashlib
             self.ensemble_preds = []
             self.ensemble_lev_dists = []
+            
+            # Debug: Test if models produce identical outputs on original audio
+            print("\n[DEBUG] Testing model consistency on original audio...")
+            original_spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
+            original_input_sizes = torch.IntTensor([original_spec.size(3)]).int()
+            
+            with torch.no_grad():
+                self.target_model.eval()
+                self.target_model.zero_grad()
+                target_orig_out, target_orig_sizes = run_model(self.target_model, self.target_version, original_spec, original_input_sizes)
+                target_orig_pred = decode_model_output(self.target_version, self.target_decoder, target_orig_out, target_orig_sizes)
+                print(f"[DEBUG] Target model on original: {target_orig_pred}")
+            
             for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
@@ -514,6 +546,22 @@ class Attacker:
                 self.ensemble_lev_dists.append(ensemble_distance)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+                
+                # Debug: Store raw outputs for comparison with target
+                if training_set == self.target_training_set and version == self.target_version:
+                    print(f"[DEBUG] Ensemble {training_set}_{version} raw output shape: {out.shape}")
+                    print(f"[DEBUG] Ensemble {training_set}_{version} raw output hash: {hashlib.md5(out.detach().cpu().numpy().tobytes()).hexdigest()}")
+                    self.ensemble_raw_out = out.clone()
+                    self.ensemble_output_sizes = output_sizes.clone()
+                    
+                    # Test on original audio too
+                    with torch.no_grad():
+                        model.eval()
+                        model.zero_grad()
+                        ensemble_orig_out, ensemble_orig_sizes = run_model(model, version, original_spec, original_input_sizes)
+                        ensemble_orig_pred = decode_model_output(version, decoder, ensemble_orig_out, ensemble_orig_sizes)
+                        print(f"[DEBUG] Ensemble {training_set}_{version} on original: {ensemble_orig_pred}")
+                        print(f"[DEBUG] Original predictions match: {target_orig_pred == ensemble_orig_pred}")
 
 
 
@@ -564,11 +612,21 @@ class Attacker:
             print("Saved ensemble loss plot to ensemble_losses.png")
 
         # prediction of adversarial sound (evaluate on target model)
-        self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
-        spec = torch_spectrogram(perturbed_data, self.torch_stft)
-        input_sizes = torch.IntTensor([spec.size(3)]).int()
-        out, output_sizes = run_model(self.target_model, self.target_version, spec, input_sizes)
-        final_output_target = decode_model_output(self.target_version, self.target_decoder, out, output_sizes)
+        with torch.no_grad():
+            self.target_model.eval()  # Ensure target model is in eval mode for final evaluation
+            self.target_model.zero_grad()  # Clear any accumulated gradients
+            spec = torch_spectrogram(perturbed_data, self.torch_stft)
+            input_sizes = torch.IntTensor([spec.size(3)]).int()
+            out, output_sizes = run_model(self.target_model, self.target_version, spec, input_sizes)
+            
+            # Debug: Compare with ensemble output if available
+            if hasattr(self, 'ensemble_raw_out'):
+                print(f"[DEBUG] Target raw output shape: {out.shape}")
+                print(f"[DEBUG] Target raw output hash: {hashlib.md5(out.detach().cpu().numpy().tobytes()).hexdigest()}")
+                print(f"[DEBUG] Raw outputs identical: {torch.allclose(out, self.ensemble_raw_out, atol=1e-6)}")
+                print(f"[DEBUG] Output sizes identical: {torch.equal(output_sizes, self.ensemble_output_sizes)}")
+            
+            final_output_target = decode_model_output(self.target_version, self.target_decoder, out, output_sizes)
         perturbed_data = perturbed_data.detach()
         abs_ori = 20*np.log10(np.sqrt(np.mean(np.absolute(data_raw.cpu().numpy())**2)))
         abs_after = 20*np.log10(np.sqrt(np.mean(np.absolute(perturbed_data.cpu().numpy())**2)))

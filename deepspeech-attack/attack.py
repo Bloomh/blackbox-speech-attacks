@@ -549,17 +549,33 @@ class Attacker:
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
 
-            # Plot ensemble Levenshtein distances as a bar chart
+            # Plot Levenshtein distances as a line plot for target and each ensemble model
             import matplotlib.pyplot as plt
             plt.figure(figsize=(10, 6))
-            plt.bar(range(len(self.ensemble_lev_dists)), self.ensemble_lev_dists, tick_label=[f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)])
-            plt.xlabel('Ensemble Model')
+            # Target model distances
+            if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
+                plt.plot(self.target_distances, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
+            # Ensemble model distances (each as a horizontal line)
+            for idx, (dist, ts, ver) in enumerate(zip(self.ensemble_lev_dists, self.ensemble_training_sets, self.ensemble_versions)):
+                plt.axhline(dist, label=f"Ensemble {ts}_{ver}", linestyle=":", alpha=0.7)
+            plt.xlabel('PGD Iteration')
             plt.ylabel('Levenshtein Distance')
-            plt.title('Levenshtein Distance to Target Sentence for Ensemble Models (Adversarial Output)')
+            plt.title('Levenshtein Distance to Target Sentence (Adversarial Output)')
+            plt.legend()
             plt.tight_layout()
-            plt.savefig('ensemble_levenshtein_distances.png')
+            plt.savefig('levenshtein_distances_lineplot.png')
             plt.close()
-            print("Saved ensemble Levenshtein distance plot to ensemble_levenshtein_distances.png")
+            print("Saved Levenshtein distance line plot to levenshtein_distances_lineplot.png")
+
+            # Save target_distances to CSV
+            if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
+                csv_filename = "target_levenshtein_distances.csv"
+                with open(csv_filename, "w", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow([f"Target {self.target_training_set}_{self.target_version}"])
+                    for dist in self.target_distances:
+                        writer.writerow([dist])
+                print(f"Saved target Levenshtein distances to {csv_filename}")
 
             # Save ensemble loss histories to CSV
             csv_filename = "ensemble_loss_histories.csv"
@@ -571,7 +587,7 @@ class Attacker:
                     writer.writerow(row)
             print(f"Saved ensemble loss histories to {csv_filename}")
 
-            # Compute and plot losses for each ensemble model and the sum (what is optimized)
+{{ ... }}
             avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*self.ensemble_loss_histories)]
 
             plt.figure(figsize=(10, 6))

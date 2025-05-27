@@ -135,13 +135,11 @@ class Attacker:
         self.ensemble_models=[m for m, _, _ in ensemble_model_info]
         for model in self.ensemble_models:
             model.to(device)
-            model.eval()
+
 
         self.ensemble_decoders=[d for _, d, _ in ensemble_model_info]
         self.ensemble_weights = [1 / len(ensemble_model_info) for _ in ensemble_model_info] if not ensemble_weights else ensemble_weights
 
-        # Ensure target model is in eval mode as well
-        self.target_model.eval()
 
     def get_ori_spec(self, save=None):
         spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
@@ -342,12 +340,30 @@ class Attacker:
 
         return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
-    def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
+    def attack(self, epsilon=None, alpha=None, attack_type="ENSEMBLE", PGD_round=10, n_queries=1000):
+        # Set all models to train mode for backward compatibility with cuDNN RNNs
+        self.target_model.train()
+        for model in self.ensemble_models:
+            model.train()
+        # Ensure BatchNorm stats remain frozen
+        freeze_batchnorm_stats(self.target_model)
+        for model in self.ensemble_models:
+            freeze_batchnorm_stats(model)
+
+        # Disable Dropout (make it behave as in eval) for all models
+        def disable_dropout(model):
+            for module in model.modules():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = 0.0
+                    module.train(False)  # Ensures dropout is off even in train mode by setting to eval mode
+        disable_dropout(self.target_model)
+        for model in self.ensemble_models:
+            disable_dropout(model)
+
         print("Start attack")
         # Ensure correct model modes for attack
         self.surrogate_model.train()
-        self.target_model.eval()
-        
+        # Removed self.target_model.eval() call
         # Freeze BatchNorm running statistics to prevent models from diverging
         freeze_batchnorm_stats(self.target_model)
         for model in self.ensemble_models:

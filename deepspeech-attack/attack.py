@@ -549,6 +549,18 @@ class Attacker:
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
 
+            # Plot ensemble Levenshtein distances as a bar chart
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(10, 6))
+            plt.bar(range(len(self.ensemble_lev_dists)), self.ensemble_lev_dists, tick_label=[f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)])
+            plt.xlabel('Ensemble Model')
+            plt.ylabel('Levenshtein Distance')
+            plt.title('Levenshtein Distance to Target Sentence for Ensemble Models (Adversarial Output)')
+            plt.tight_layout()
+            plt.savefig('ensemble_levenshtein_distances.png')
+            plt.close()
+            print("Saved ensemble Levenshtein distance plot to ensemble_levenshtein_distances.png")
+
             # Save ensemble loss histories to CSV
             csv_filename = "ensemble_loss_histories.csv"
             with open(csv_filename, "w", newline="") as csvfile:

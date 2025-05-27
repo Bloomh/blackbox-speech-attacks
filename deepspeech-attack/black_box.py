@@ -53,7 +53,7 @@ if __name__ == "__main__":
     # attack parameters
     parser.add_argument('--target_sentence', type=str, default="HELLO WORLD", help='Please use uppercase')
     parser.add_argument('--mode', type=str, default="PGD", help='PGD or FGSM or [new -->] NES_GREY or NES_BLACK or ENSEMBLE') # we'll manually have to edit the multi-model inputs below for ensemble attacks
-    parser.add_argument('--epsilon', type=float, default=25, help='epsilon')
+    parser.add_argument('--epsilon', type=float, default=0.25, help='epsilon')
     parser.add_argument('--alpha', type=float, default=1e-3, help='alpha')
     parser.add_argument('--PGD_iter', type=int, default=50, help='PGD iteration times')
     parser.add_argument('--n_queries', type=int, default=25, help='Number of queries for NES attack')
@@ -77,8 +77,10 @@ if __name__ == "__main__":
     # ENSEMBLE INIT
     
     # if the attack mode has been specified as ENSEMBLE, manually modify ensemble here.
-    ensemble_versions = ["v1", "v2", "v2", "v1"] # we might have more of each if we get pretrained models on diff datasets
-    ensemble_training_sets = ["librispeech", "librispeech", "ted", "an4"]
+    # ensemble_versions = ["v1", "v2", "v2", "v1"] # we might have more of each if we get pretrained models on diff datasets
+    # ensemble_training_sets = ["librispeech", "librispeech", "ted", "an4"]
+    ensemble_versions = ["v2"]
+    ensemble_training_sets = ["librispeech"]
     
 
     # Run attack

@@ -135,10 +135,13 @@ class Attacker:
         self.ensemble_models=[m for m, _, _ in ensemble_model_info]
         for model in self.ensemble_models:
             model.to(device)
-            model.train()
+            model.eval()
 
         self.ensemble_decoders=[d for _, d, _ in ensemble_model_info]
         self.ensemble_weights = [1 / len(ensemble_model_info) for _ in ensemble_model_info] if not ensemble_weights else ensemble_weights
+
+        # Ensure target model is in eval mode as well
+        self.target_model.eval()
 
     def get_ori_spec(self, save=None):
         spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)

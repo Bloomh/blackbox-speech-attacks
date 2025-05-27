@@ -532,24 +532,19 @@ class Attacker:
                     print(f"[PGD ITER {i+1}] Target model Levenshtein Distance: {l_distance}")
                     print(f"[PGD ITER {i+1}] Adversarial input min/max: {data.min().item():.4f}/{data.max().item():.4f} (mean: {data.mean().item():.4f})")
 
-            perturbed_data = data
-
-            # Evaluate adversarial example on all ensemble models
-            self.ensemble_preds = []
-            self.ensemble_lev_dists = []
-            
-            for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
-                spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
-                input_sizes = torch.IntTensor([spec.size(3)]).int()
-
-                model.eval()
-                out, output_sizes = run_model(model, version, spec, input_sizes)
-                ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
-                ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
-                self.ensemble_preds.append(ensemble_pred)
-                self.ensemble_lev_dists.append(ensemble_distance)
-                print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
-                print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
+                # Track ensemble model Levenshtein distances at each PGD step
+                if not hasattr(self, 'ensemble_lev_dists_hist'):
+                    self.ensemble_lev_dists_hist = [[] for _ in self.ensemble_models]
+                for idx, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
+                    spec_e = torch_spectrogram(data.to(self.device), self.torch_stft)
+                    input_sizes_e = torch.IntTensor([spec_e.size(3)]).int()
+                    model.eval()
+                    out_e, output_sizes_e = run_model(model, version, spec_e, input_sizes_e)
+                    ensemble_pred = decode_model_output(version, decoder, out_e, output_sizes_e)
+                    ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
+                    self.ensemble_lev_dists_hist[idx].append(ensemble_distance)
+                    print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} prediction: {ensemble_pred}")
+                    print(f"[PGD ITER {i+1}] Ensemble {training_set}_{version} Levenshtein Distance: {ensemble_distance}")
 
             # Plot Levenshtein distances as a line plot for target and each ensemble model
             import matplotlib.pyplot as plt
@@ -557,9 +552,10 @@ class Attacker:
             # Target model distances
             if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
                 plt.plot(self.target_distances, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
-            # Ensemble model distances (each as a horizontal line)
-            for idx, (dist, ts, ver) in enumerate(zip(self.ensemble_lev_dists, self.ensemble_training_sets, self.ensemble_versions)):
-                plt.axhline(dist, label=f"Ensemble {ts}_{ver}", linestyle=":", alpha=0.7)
+            # Ensemble model distances (plot as lines, not horizontal)
+            if hasattr(self, 'ensemble_lev_dists_hist'):
+                for idx, (dists, ts, ver) in enumerate(zip(self.ensemble_lev_dists_hist, self.ensemble_training_sets, self.ensemble_versions)):
+                    plt.plot(dists, label=f"Ensemble {ts}_{ver}", linestyle=":", alpha=0.7)
             plt.xlabel('PGD Iteration')
             plt.ylabel('Levenshtein Distance')
             plt.title('Levenshtein Distance to Target Sentence (Adversarial Output)')
@@ -578,6 +574,16 @@ class Attacker:
                     for dist in self.target_distances:
                         writer.writerow([dist])
                 print(f"Saved target Levenshtein distances to {csv_filename}")
+            # Save ensemble Levenshtein histories to CSV
+            if hasattr(self, 'ensemble_lev_dists_hist'):
+                csv_filename = "ensemble_levenshtein_histories.csv"
+                with open(csv_filename, "w", newline="") as csvfile:
+                    writer = csv.writer(csvfile)
+                    header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)]
+                    writer.writerow(header)
+                    for row in zip(*self.ensemble_lev_dists_hist):
+                        writer.writerow(row)
+                print(f"Saved ensemble Levenshtein histories to {csv_filename}")
 
             # Save ensemble loss histories to CSV
             csv_filename = "ensemble_loss_histories.csv"

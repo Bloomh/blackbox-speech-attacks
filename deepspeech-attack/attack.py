@@ -587,7 +587,6 @@ class Attacker:
                     writer.writerow(row)
             print(f"Saved ensemble loss histories to {csv_filename}")
 
-{{ ... }}
             avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*self.ensemble_loss_histories)]
 
             plt.figure(figsize=(10, 6))

@@ -511,24 +511,26 @@ class Attacker:
                     target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
                 self.target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
 
-                # # Debug: Compare target loss to matching ensemble model loss
-                # try:
-                #     idx = next(
-                #         i for i, (ts, ver) in enumerate(zip(self.ensemble_training_sets, self.ensemble_versions))
-                #         if ts == self.target_training_set and ver == self.target_version
-                #     )
-                #     matching_ensemble_loss = losses[idx]
-                #     print(f"[DEBUG] Target loss (eval): {target_loss.item():.6f}")
-                #     print(f"[DEBUG] Ensemble loss (during PGD): {matching_ensemble_loss.item():.6f}")
-                #     print(f"[DEBUG] Losses identical: {torch.allclose(target_loss, matching_ensemble_loss, atol=1e-6)}")
-                # except StopIteration:
-                #     print('[DEBUG] No matching ensemble model for target model found!')
-
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
                 data_grad = data.grad.data
 
+                # PGD update
                 data = self.pgd_attack(data, data_raw, epsilon, alpha, data_grad).detach_()
+
+                # Debug logs for adversarial input and prediction
+                with torch.no_grad():
+                    self.target_model.eval()
+                    self.target_model.zero_grad()
+                    spec_t = torch_spectrogram(data, self.torch_stft)
+                    input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
+                    out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
+                    final_output_target = decode_model_output(self.target_version, self.target_decoder, out_t, output_sizes_t)
+                    l_distance = Levenshtein.distance(self.target_string, final_output_target)
+                    self.target_distances.append(l_distance)
+                    print(f"[PGD ITER {i+1}] Target model adversarial prediction: {final_output_target}")
+                    print(f"[PGD ITER {i+1}] Target model Levenshtein Distance: {l_distance}")
+                    print(f"[PGD ITER {i+1}] Adversarial input min/max: {data.min().item():.4f}/{data.max().item():.4f} (mean: {data.mean().item():.4f})")
 
             perturbed_data = data
 

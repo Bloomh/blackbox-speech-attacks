@@ -520,8 +520,6 @@ class Attacker:
 
                 # Debug logs for adversarial input and prediction
                 with torch.no_grad():
-                    self.target_model.eval()
-                    self.target_model.zero_grad()
                     spec_t = torch_spectrogram(data, self.torch_stft)
                     input_sizes_t = torch.IntTensor([spec_t.size(3)]).int()
                     out_t, output_sizes_t = run_model(self.target_model, self.target_version, spec_t, input_sizes_t)
@@ -538,7 +536,6 @@ class Attacker:
                 for idx, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                     spec_e = torch_spectrogram(data.to(self.device), self.torch_stft)
                     input_sizes_e = torch.IntTensor([spec_e.size(3)]).int()
-                    model.eval()
                     out_e, output_sizes_e = run_model(model, version, spec_e, input_sizes_e)
                     ensemble_pred = decode_model_output(version, decoder, out_e, output_sizes_e)
                     ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)

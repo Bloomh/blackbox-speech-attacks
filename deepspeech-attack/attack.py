@@ -484,15 +484,6 @@ class Attacker:
             self.ensemble_loss_histories = [[] for _ in self.ensemble_models]
             self.target_loss_history = []
 
-            # this is not too different from PGD - we're just doing it on a list of models and doing a weighted average on the losses before backprop
-            def print_model_mode_and_bn_stats(model, label):
-                print(f"[DEBUG] {label} model training: {model.training}")
-                for name, module in model.named_modules():
-                    if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
-                        print(f"[DEBUG] {label} {name} running_mean[0]: {module.running_mean[0].item()}, running_var[0]: {module.running_var[0].item()}, track_running_stats: {module.track_running_stats}, training: {module.training}")
-                    if isinstance(module, torch.nn.Dropout):
-                        print(f"[DEBUG] {label} {name} Dropout p: {module.p}, training: {module.training}")
-
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
                 data.requires_grad = True
@@ -506,8 +497,6 @@ class Attacker:
                     out, output_sizes = self._forward_model(model, version, spec, input_sizes)
                     out = out.transpose(0, 1)  # TxNxH
                     out = out.log_softmax(2)
-                    print_model_mode_and_bn_stats(model, f"Ensemble {version}")
-                    print(f"[DEBUG] Ensemble {version} output sample: {out.flatten()[:5]}")
                     losses.append(self.criterion(out, self.target, output_sizes, self.target_lengths))
                     model.zero_grad()
                 # Store each model's loss for this round
@@ -519,23 +508,21 @@ class Attacker:
                     out_t, output_sizes_t = self._forward_model(self.target_model, self.target_version, spec, input_sizes)
                     out_t = out_t.transpose(0, 1)
                     out_t = out_t.log_softmax(2)
-                    print_model_mode_and_bn_stats(self.target_model, "Target")
-                    print(f"[DEBUG] Target output sample: {out_t.flatten()[:5]}")
                     target_loss = self.criterion(out_t, self.target, output_sizes_t, self.target_lengths)
                 self.target_loss_history.append(target_loss.item() if hasattr(target_loss, "item") else float(target_loss))
 
-                # Debug: Compare target loss to matching ensemble model loss
-                try:
-                    idx = next(
-                        i for i, (ts, ver) in enumerate(zip(self.ensemble_training_sets, self.ensemble_versions))
-                        if ts == self.target_training_set and ver == self.target_version
-                    )
-                    matching_ensemble_loss = losses[idx]
-                    print(f"[DEBUG] Target loss (eval): {target_loss.item():.6f}")
-                    print(f"[DEBUG] Ensemble loss (during PGD): {matching_ensemble_loss.item():.6f}")
-                    print(f"[DEBUG] Losses identical: {torch.allclose(target_loss, matching_ensemble_loss, atol=1e-6)}")
-                except StopIteration:
-                    print('[DEBUG] No matching ensemble model for target model found!')
+                # # Debug: Compare target loss to matching ensemble model loss
+                # try:
+                #     idx = next(
+                #         i for i, (ts, ver) in enumerate(zip(self.ensemble_training_sets, self.ensemble_versions))
+                #         if ts == self.target_training_set and ver == self.target_version
+                #     )
+                #     matching_ensemble_loss = losses[idx]
+                #     print(f"[DEBUG] Target loss (eval): {target_loss.item():.6f}")
+                #     print(f"[DEBUG] Ensemble loss (during PGD): {matching_ensemble_loss.item():.6f}")
+                #     print(f"[DEBUG] Losses identical: {torch.allclose(target_loss, matching_ensemble_loss, atol=1e-6)}")
+                # except StopIteration:
+                #     print('[DEBUG] No matching ensemble model for target model found!')
 
                 loss = sum(w * loss for w, loss in zip(self.ensemble_weights, losses))
                 loss.backward()
@@ -549,87 +536,18 @@ class Attacker:
             self.ensemble_preds = []
             self.ensemble_lev_dists = []
             
-            # Debug: Test if models produce identical outputs on original audio
-            print("\n[DEBUG] Testing model consistency on original audio...")
-            original_spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
-            original_input_sizes = torch.IntTensor([original_spec.size(3)]).int()
-            
-            with torch.no_grad():
-                self.target_model.eval()
-                self.target_model.zero_grad()
-                target_orig_out, target_orig_sizes = run_model(self.target_model, self.target_version, original_spec, original_input_sizes)
-                target_orig_pred = decode_model_output(self.target_version, self.target_decoder, target_orig_out, target_orig_sizes)
-                print(f"[DEBUG] Target model on original: {target_orig_pred}")
-            
             for i, (model, version, decoder, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_decoders, self.ensemble_training_sets)):
                 spec = torch_spectrogram(perturbed_data.to(self.device), self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
 
-                # Debug: print input tensor hash and stats
-                def tensor_md5(tensor):
-                    return hashlib.md5(tensor.detach().cpu().numpy().tobytes()).hexdigest()
-                print(f"[DEBUG] Ensemble Model {i} input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
-                print(f"[DEBUG] Ensemble decoder id: {id(decoder)}")
-
                 model.eval()
-                # Debug info
-                print(f"\n[DEBUG] Ensemble Model {i}:")
-                print(f"  Model object id: {id(model)}")
-                print(f"  Model mode: {'train' if model.training else 'eval'}")
-                print(f"  Model device: {next(model.parameters()).device if hasattr(model, 'parameters') else 'N/A'}")
-                print(f"  Model version: {version}")
-                print(f"  Model training set: {training_set}")
-                print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
                 out, output_sizes = run_model(model, version, spec, input_sizes)
-                # Debug: print decoder type and config
-                print(f"[DEBUG] Ensemble decoder type: {type(decoder)}")
-                try:
-                    print(f"[DEBUG] Ensemble decoder config: {vars(decoder)}")
-                except Exception as e:
-                    print(f"[DEBUG] Ensemble decoder config: <unavailable> ({e})")
                 ensemble_pred = decode_model_output(version, decoder, out, output_sizes)
                 ensemble_distance = Levenshtein.distance(self.target_string, ensemble_pred)
                 self.ensemble_preds.append(ensemble_pred)
                 self.ensemble_lev_dists.append(ensemble_distance)
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Adversarial prediction: {ensemble_pred}")
                 print(f"[ENSEMBLE MODEL {training_set}_{version}] Levenshtein Distance: {ensemble_distance}")
-                
-                # Debug: Store raw outputs for comparison with target
-                if training_set == self.target_training_set and version == self.target_version:
-                    print(f"[DEBUG] Ensemble {training_set}_{version} raw output shape: {out.shape}")
-                    print(f"[DEBUG] Ensemble {training_set}_{version} raw output hash: {hashlib.md5(out.detach().cpu().numpy().tobytes()).hexdigest()}")
-                    self.ensemble_raw_out = out.clone()
-                    self.ensemble_output_sizes = output_sizes.clone()
-                    
-                    # Test on original audio too
-                    with torch.no_grad():
-                        model.eval()
-                        model.zero_grad()
-                        ensemble_orig_out, ensemble_orig_sizes = run_model(model, version, original_spec, original_input_sizes)
-                        ensemble_orig_pred = decode_model_output(version, decoder, ensemble_orig_out, ensemble_orig_sizes)
-                        print(f"[DEBUG] Ensemble {training_set}_{version} on original: {ensemble_orig_pred}")
-                        print(f"[DEBUG] Original predictions match: {target_orig_pred == ensemble_orig_pred}")
-
-
-
-            # Debug for target model
-            # Debug: print input tensor hash and stats for target model
-            # Debug: print decoder type and config for target
-            print(f"[DEBUG] Target decoder type: {type(self.target_decoder)}")
-            try:
-                print(f"[DEBUG] Target decoder config: {vars(self.target_decoder)}")
-            except Exception as e:
-                print(f"[DEBUG] Target decoder config: <unavailable> ({e})")
-            print(f"[DEBUG] Target input hash: {tensor_md5(spec)} min: {spec.min().item():.6f} max: {spec.max().item():.6f} mean: {spec.mean().item():.6f}")
-            print(f"[DEBUG] Target decoder id: {id(self.target_decoder)}")
-
-            print(f"\n[DEBUG] Target Model:")
-            print(f"  Model object id: {id(self.target_model)}")
-            print(f"  Model mode: {'train' if self.target_model.training else 'eval'}")
-            print(f"  Model device: {next(self.target_model.parameters()).device if hasattr(self.target_model, 'parameters') else 'N/A'}")
-            print(f"  Model version: {self.target_version}")
-            print(f"  Model training set: {self.target_training_set}")
-            print(f"  Input tensor shape: {spec.shape}, dtype: {spec.dtype}, device: {spec.device}")
 
             # Save ensemble loss histories to CSV
             csv_filename = "ensemble_loss_histories.csv"
@@ -665,13 +583,6 @@ class Attacker:
             spec = torch_spectrogram(perturbed_data, self.torch_stft)
             input_sizes = torch.IntTensor([spec.size(3)]).int()
             out, output_sizes = run_model(self.target_model, self.target_version, spec, input_sizes)
-
-            # Debug: Compare with ensemble output if available
-            if hasattr(self, 'ensemble_raw_out'):
-                print(f"[DEBUG] Target raw output shape: {out.shape}")
-                print(f"[DEBUG] Target raw output hash: {hashlib.md5(out.detach().cpu().numpy().tobytes()).hexdigest()}")
-                print(f"[DEBUG] Raw outputs identical: {torch.allclose(out, self.ensemble_raw_out, atol=1e-6)}")
-                print(f"[DEBUG] Output sizes identical: {torch.equal(output_sizes, self.ensemble_output_sizes)}")
 
             final_output_target = decode_model_output(self.target_version, self.target_decoder, out, output_sizes)
         perturbed_data = perturbed_data.detach()

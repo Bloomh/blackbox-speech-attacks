@@ -78,7 +78,7 @@ if __name__ == "__main__":
     
     # if the attack mode has been specified as ENSEMBLE, manually modify ensemble here.
     ensemble_versions = ["v1", "v2", "v2", "v1"] # we might have more of each if we get pretrained models on diff datasets
-    ensemble_training_sets = ["librispeech", "librispeech", "ted", "an4"]
+    ensemble_training_sets = ["librispeech", "ted", "an4", "an4"]
     
 
     # Run attack

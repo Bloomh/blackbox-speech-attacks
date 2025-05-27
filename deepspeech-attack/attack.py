@@ -341,27 +341,10 @@ class Attacker:
         return cos_sim.item(), sign_agreement.item(), top_sign_agreement.item() # Restored top_sign_agreement
 
     def attack(self, epsilon=None, alpha=None, attack_type="ENSEMBLE", PGD_round=10, n_queries=1000):
-        # --- DEBUG: Output model architectures ---
-        print("[DEBUG] Target model architecture:")
-        print(self.target_model)
-        for idx, (model, version, training_set) in enumerate(zip(self.ensemble_models, self.ensemble_versions, self.ensemble_training_sets)):
-            print(f"[DEBUG] Ensemble model {idx} ({training_set}_{version}) architecture:")
-            print(model)
-
-        # --- DEBUG: Set all Dropout and BatchNorm modules to eval mode ---
-        def set_dropout_batchnorm_eval(model):
-            for module in model.modules():
-                if isinstance(module, (torch.nn.Dropout, torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
-                    module.eval()
-        set_dropout_batchnorm_eval(self.target_model)
+        # Set all models to train mode for backward compatibility with cuDNN RNNs
+        self.target_model.train()
         for model in self.ensemble_models:
-            set_dropout_batchnorm_eval(model)
-        print("[DEBUG] All Dropout and BatchNorm layers set to eval mode on all models.")
-
-        # # Set all models to train mode for backward compatibility with cuDNN RNNs
-        # self.target_model.train()
-        # for model in self.ensemble_models:
-        #     model.train()
+            model.train()
         # # Ensure BatchNorm stats remain frozen
         # freeze_batchnorm_stats(self.target_model)
         # for model in self.ensemble_models:
@@ -376,6 +359,16 @@ class Attacker:
         # disable_dropout(self.target_model)
         # for model in self.ensemble_models:
         #     disable_dropout(model)
+
+        # --- DEBUG: Set all Dropout and BatchNorm modules to eval mode ---
+        def set_dropout_batchnorm_eval(model):
+            for module in model.modules():
+                if isinstance(module, (torch.nn.Dropout, torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
+                    module.eval()
+        set_dropout_batchnorm_eval(self.target_model)
+        for model in self.ensemble_models:
+            set_dropout_batchnorm_eval(model)
+        print("[DEBUG] All Dropout and BatchNorm layers set to eval mode on all models.")
 
         print("Start attack")
         # Ensure correct model modes for attack

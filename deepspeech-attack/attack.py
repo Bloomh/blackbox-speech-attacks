@@ -119,7 +119,7 @@ class Attacker:
         self.ensemble_models=[m for m, _, _ in ensemble_model_info]
         for model in self.ensemble_models:
             model.to(device)
-            model.train()
+            model.eval()
 
         self.ensemble_decoders=[d for _, d, _ in ensemble_model_info]
         self.ensemble_weights = [1 / len(ensemble_model_info) for _ in ensemble_model_info] if not ensemble_weights else ensemble_weights
@@ -326,7 +326,7 @@ class Attacker:
     def attack(self, epsilon, alpha, attack_type="FGSM", PGD_round=40, n_queries=25):
         print("Start attack")
         # Ensure correct model modes for attack
-        self.surrogate_model.train()
+        self.surrogate_model.eval()
         self.target_model.eval()
 
         data, target = self.sound.to(self.device), self.target.to(self.device)

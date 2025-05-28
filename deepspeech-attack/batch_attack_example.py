@@ -51,7 +51,7 @@ for job in tqdm(jobs, desc="Batch Attacks"):
         {"training_set": ts, "version": v}
         for ts in training_sets
         for v in versions
-        if not (ts == target_training_set and v == target_version) and v != target_version
+        if not (ts == target_training_set and v == target_version) and v == target_version
     ]
 
     uid = f"{target_training_set}-{target_version}-{target_sentence}-{input_wav.split('/')[-1].split('.')[0]}".replace(" ", "_")

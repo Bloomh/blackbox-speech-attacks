@@ -92,7 +92,7 @@ def run_batch_ensemble_attacks(
                     n_queries=attack_params.get('n_queries', 25)
                 )
                 # Unpack outputs (see Attacker.attack)
-                db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances, ensemble_lev_dists = out
+                db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances, ensemble_lev_dists, ensemble_loss_histories, target_loss_history = out
                 # Compose result row
                 row = {
                     'adv_wav_path': adv_wav_path,
@@ -105,6 +105,8 @@ def run_batch_ensemble_attacks(
                     'target_pred': final_output_target,
                     'target_lev_dists': target_distances,
                     'ensemble_lev_dists': json.dumps(ensemble_lev_dists) if ensemble_lev_dists else None,
+                    'target_losses': target_loss_history,
+                    'ensemble_losses': ensemble_loss_histories,
                     'max_db_diff': db_difference,
                 }
                 results.append(row)

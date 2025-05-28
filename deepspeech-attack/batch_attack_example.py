@@ -32,34 +32,36 @@ device = "cuda"
 base_dir = "batch_attack_results"
 os.makedirs(base_dir, exist_ok=True)
 
-# Loop over all combinations
-total_iters = len(input_wavs) * len(all_target_sentences) * len(training_sets) * len(versions)
-curr_iter = 0
+from tqdm import tqdm
+
+# Prepare all jobs for progress bar
+jobs = []
 for input_wav in input_wavs:
     for target_sentence in all_target_sentences:
         for target_training_set in training_sets:
             for target_version in versions:
-                curr_iter += 1
-                print(f"Running attack {curr_iter}/{total_iters}")
+                jobs.append((input_wav, target_sentence, target_training_set, target_version))
 
-                target_model_config = {"training_set": target_training_set, "version": target_version}
-                ensemble_model_configs = [
-                    {"training_set": ts, "version": v}
-                    for ts in training_sets
-                    for v in versions
-                    if not (ts == target_training_set and v == target_version) and v != target_version
-                ]
+for job in tqdm(jobs, desc="Batch Attacks"):
+    input_wav, target_sentence, target_training_set, target_version = job
+    target_model_config = {"training_set": target_training_set, "version": target_version}
+    ensemble_model_configs = [
+        {"training_set": ts, "version": v}
+        for ts in training_sets
+        for v in versions
+        if not (ts == target_training_set and v == target_version) and v != target_version
+    ]
 
-                uid = f"{target_training_set}-{target_version}-{target_sentence}-{input_wav.split('/')[-1]}"
-                print(f"Running attack on {uid}")
+    uid = f"{target_training_set}-{target_version}-{target_sentence}-{input_wav.split('/')[-1]}"
+    print(f"Running attack on {uid}")
 
-                run_batch_ensemble_attacks(
-                    input_wav=input_wav,
-                    target_sentences=[target_sentence],
-                    target_model_configs=[target_model_config],
-                    ensemble_model_configs=[ensemble_model_configs],
-                    attack_params=attack_params,
-                    device=device,
-                    output_csv=os.path.join(base_dir, f"{uid}.csv"),
-                    adv_output_dir=os.path.join(base_dir, uid)
-                )
+    run_batch_ensemble_attacks(
+        input_wav=input_wav,
+        target_sentences=[target_sentence],
+        target_model_configs=[target_model_config],
+        ensemble_model_configs=[ensemble_model_configs],
+        attack_params=attack_params,
+        device=device,
+        output_csv=os.path.join(base_dir, f"{uid}.csv"),
+        adv_output_dir=os.path.join(base_dir, uid)
+    )

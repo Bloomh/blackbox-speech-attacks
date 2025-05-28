@@ -6,16 +6,18 @@ import json
 input_wav = "processed_sound/normal0.wav"
 
 # List of target sentences
-all_target_sentences = [
-    "HELLO WORLD",
-    "TEST PHRASE",
-    "HENRY",
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    "QWERTYUIOPASDFGHJKLZXCVBNM",
-    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG",
-    "THE DOCUMENT WAS ANNOTATED PROPERLY",
-    ""
-]
+import csv
+
+# Read the 10 sentences from the target_sentences.csv file
+all_target_sentences = []
+with open("../target_sentences.csv", "r", encoding="utf-8") as csvfile:
+    reader = csv.reader(csvfile)
+    next(reader)
+    for row in reader:
+        if row:
+            s = row[0].strip()
+            all_target_sentences.append(s)
+
 
 # List of possible target model configs
 all_target_model_configs = [

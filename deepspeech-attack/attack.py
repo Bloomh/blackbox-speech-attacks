@@ -92,11 +92,6 @@ class Attacker:
         import os
         self.adv_output_dir = adv_output_dir or os.getcwd()
         os.makedirs(self.adv_output_dir, exist_ok=True)
-        # print(f"[MODEL LOAD] Target model: training_set={target_training_set}, version={target_version}")
-        # print(f"[MODEL LOAD] Surrogate model: version={surrogate_version}")
-        if ensemble_training_sets is not None and ensemble_versions is not None:
-            for i, (trainset, version) in enumerate(zip(ensemble_training_sets, ensemble_versions)):
-                print(f"[MODEL LOAD] Ensemble model {i}: training_set={trainset}, version={version}")
         self.target_distances = []
         self.surrogate_distances = []
         """

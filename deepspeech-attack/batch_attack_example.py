@@ -24,7 +24,7 @@ versions = ["v1", "v2"]
 attack_params = {
     "epsilon": 0.03,
     "alpha": 0.001,
-    "PGD_iter": 10,
+    "PGD_iter": 250,
     "n_queries": 250
 }
 
@@ -33,14 +33,16 @@ base_dir = "batch_attack_results"
 os.makedirs(base_dir, exist_ok=True)
 
 from tqdm import tqdm
+from random import sample
+from itertools import product
 
 # Prepare all jobs for progress bar
 jobs = []
-for input_wav in input_wavs:
-    for target_sentence in all_target_sentences:
-        for target_training_set in training_sets:
-            for target_version in versions:
-                jobs.append((input_wav, target_sentence, target_training_set, target_version))
+wav_sentence_pairs = list(product(input_wavs, all_target_sentences))
+for target_training_set in training_sets:
+    for target_version in versions:
+        for input_wav, target_sentence in sample(wav_sentence_pairs, 5):
+            jobs.append((input_wav, target_sentence, target_training_set, target_version))
 
 for job in tqdm(jobs, desc="Batch Attacks"):
     input_wav, target_sentence, target_training_set, target_version = job

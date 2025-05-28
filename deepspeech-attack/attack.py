@@ -87,7 +87,10 @@ def unfreeze_batchnorm_stats(model):
 
 class Attacker:
     def __init__(self, target_model, surrogate_model, sound, target, target_decoder, sample_rate=16000, device="cpu", save=None, surrogate_decoder=None, surrogate_version="v2", target_version="v2", target_training_set="librispeech",
-                 ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None):
+                 ensemble_versions=None, ensemble_training_sets=None, ensemble_model_info=None, ensemble_weights=None, adv_output_dir=None):
+        import os
+        self.adv_output_dir = adv_output_dir or os.getcwd()
+        os.makedirs(self.adv_output_dir, exist_ok=True)
         # print(f"[MODEL LOAD] Target model: training_set={target_training_set}, version={target_version}")
         # print(f"[MODEL LOAD] Surrogate model: version={surrogate_version}")
         if ensemble_training_sets is not None and ensemble_versions is not None:
@@ -142,13 +145,18 @@ class Attacker:
 
 
     def get_ori_spec(self, save=None):
-        spec = torch_spectrogram(self.sound.to(self.device), self.torch_stft)
-        plt.imshow(spec.cpu().numpy()[0][0])
+        import os
+        spec = torch_spectrogram(self.sound, self.torch_stft)
+        plt.figure(figsize=(10, 4))
+        plt.imshow(spec[0, 0].cpu().detach().numpy(), aspect='auto', origin='lower')
+        plt.title('Original Spectrogram')
+        plt.tight_layout()
         if save:
+            # If save is not absolute, save in adv_output_dir
+            if not os.path.isabs(save):
+                save = os.path.join(self.adv_output_dir, save)
             plt.savefig(save)
-            plt.clf()
-        else:
-            plt.show()
+        plt.close()
 
     def get_adv_spec(self, save=None):
         spec = torch_spectrogram(self.perturbed_data.to(self.device), self.torch_stft)
@@ -555,13 +563,16 @@ class Attacker:
             plt.title('Levenshtein Distance to Target Sentence (Adversarial Output)')
             plt.legend()
             plt.tight_layout()
-            plt.savefig('levenshtein_distances_lineplot.png')
+            import os
+            lev_plot_path = os.path.join(self.adv_output_dir, 'levenshtein_distances_lineplot.png')
+            plt.savefig(lev_plot_path)
             plt.close()
-            print("Saved Levenshtein distance line plot to levenshtein_distances_lineplot.png")
+            print(f"Saved Levenshtein distance line plot to {lev_plot_path}")
 
             # Save target_distances to CSV
             if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
-                csv_filename = "target_levenshtein_distances.csv"
+                import os
+                csv_filename = os.path.join(self.adv_output_dir, "target_levenshtein_distances.csv")
                 with open(csv_filename, "w", newline="") as csvfile:
                     writer = csv.writer(csvfile)
                     writer.writerow([f"Target {self.target_training_set}_{self.target_version}"])
@@ -570,7 +581,8 @@ class Attacker:
                 print(f"Saved target Levenshtein distances to {csv_filename}")
             # Save ensemble Levenshtein histories to CSV
             if hasattr(self, 'ensemble_lev_dists_hist'):
-                csv_filename = "ensemble_levenshtein_histories.csv"
+                import os
+                csv_filename = os.path.join(self.adv_output_dir, "ensemble_levenshtein_histories.csv")
                 with open(csv_filename, "w", newline="") as csvfile:
                     writer = csv.writer(csvfile)
                     header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)]
@@ -580,7 +592,8 @@ class Attacker:
                 print(f"Saved ensemble Levenshtein histories to {csv_filename}")
 
             # Save ensemble loss histories to CSV
-            csv_filename = "ensemble_loss_histories.csv"
+            import os
+            csv_filename = os.path.join(self.adv_output_dir, "ensemble_loss_histories.csv")
             with open(csv_filename, "w", newline="") as csvfile:
                 writer = csv.writer(csvfile)
                 header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)] + [f"target_{self.target_training_set}_{self.target_version}"]
@@ -601,9 +614,11 @@ class Attacker:
             plt.title("Ensemble and Target Model Losses During PGD Attack")
             plt.legend()
             plt.tight_layout()
-            plt.savefig("ensemble_losses.png")
+            import os
+            ensemble_loss_plot_path = os.path.join(self.adv_output_dir, "ensemble_losses.png")
+            plt.savefig(ensemble_loss_plot_path)
             plt.close()
-            print("Saved ensemble loss plot to ensemble_losses.png")
+            print(f"Saved ensemble loss plot to {ensemble_loss_plot_path}")
 
         # prediction of adversarial sound (evaluate on target model)
         with torch.no_grad():

@@ -80,7 +80,8 @@ def run_batch_ensemble_attacks(
                     ensemble_training_sets=ens_trainsets,
                     ensemble_model_info=ensemble_model_info,
                     ensemble_weights=None,
-                    save=adv_wav_path
+                    save=adv_wav_path,
+                    adv_output_dir=adv_output_dir
                 )
                 # Run attack
                 out = attacker.attack(

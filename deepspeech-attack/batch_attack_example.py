@@ -11,11 +11,9 @@ all_target_sentences = [
     "TEST PHRASE",
     "HENRY",
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    "1234567890",
-    "!@#$%^&*()_+",
     "QWERTYUIOPASDFGHJKLZXCVBNM",
-    "abcdefghijklmnopqrstuvwxyz",
-    "the quick brown fox jumps over the lazy dog",
+    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG",
+    "THE DOCUMENT WAS ANNOTATED PROPERLY",
     ""
 ]
 

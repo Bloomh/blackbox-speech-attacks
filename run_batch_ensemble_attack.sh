@@ -5,6 +5,8 @@
 #SBATCH -c 1
 #SBATCH -G 1
 #SBATCH --mem=24G
+#SBATCH --mail-user=hmbloom@uchicago.edu
+#SBATCH --mail-type=ALL
 
 # Move to project root
 cd /share/data/lang/users/ttic_31110/hmbloom/blackbox-speech-attacks || exit 1

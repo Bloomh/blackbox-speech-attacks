@@ -49,8 +49,8 @@ attack_params = {
     "n_queries": 250
 }
 device = "cuda"
-output_dir = "batch_attack_results"
-os.makedirs(output_dir, exist_ok=True)
+base_dir = "batch_attack_results"
+os.makedirs(base_dir, exist_ok=True)
 
 # Loop over all combinations
 for ens_idx, ensemble_model_configs in enumerate(all_ensemble_model_configs):
@@ -59,7 +59,9 @@ for ens_idx, ensemble_model_configs in enumerate(all_ensemble_model_configs):
             # Use unique output file per combo
             ens_str = "_".join([f"{cfg['training_set']}-{cfg['version']}" for cfg in ensemble_model_configs])
             tgt_str = f"{target_model_config['training_set']}-{target_model_config['version']}"
-            sent_str = target_sentence[:20].replace(" ", "_").replace("/", "-")  # Truncate for filename safety
+            sent_str = target_sentence.replace(" ", "_").replace("/", "-")  # Truncate for filename safety
+            output_dir = os.path.join(base_dir, ens_str, tgt_str, sent_str)
+            os.makedirs(output_dir, exist_ok=True)
             output_csv = os.path.join(
                 output_dir,
                 f"results_tgt-{tgt_str}_ens-{ens_str}_sent-{sent_str}.csv"

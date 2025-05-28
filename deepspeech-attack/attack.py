@@ -9,6 +9,7 @@ import math
 import hashlib
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
+    sentence = sentence.upper()
     out = []
     for idx, word in enumerate(sentence):
         if word not in labels:
@@ -569,27 +570,40 @@ class Attacker:
             plt.close()
             print(f"Saved Levenshtein distance line plot to {lev_plot_path}")
 
-            # Save target_distances to CSV
+            # Save all Levenshtein distances (target and ensemble) to a single CSV file
+            import csv
+            lev_csv_path = os.path.join(self.adv_output_dir, 'levenshtein_distances.csv')
+            # Prepare columns: Target, then each ensemble
+            columns = []
+            data_rows = []
             if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
-                import os
-                csv_filename = os.path.join(self.adv_output_dir, "target_levenshtein_distances.csv")
-                with open(csv_filename, "w", newline="") as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow([f"Target {self.target_training_set}_{self.target_version}"])
-                    for dist in self.target_distances:
-                        writer.writerow([dist])
-                print(f"Saved target Levenshtein distances to {csv_filename}")
-            # Save ensemble Levenshtein histories to CSV
-            if hasattr(self, 'ensemble_lev_dists_hist'):
-                import os
-                csv_filename = os.path.join(self.adv_output_dir, "ensemble_levenshtein_histories.csv")
-                with open(csv_filename, "w", newline="") as csvfile:
-                    writer = csv.writer(csvfile)
-                    header = [f"{ts}_{ver}" for ts, ver in zip(self.ensemble_training_sets, self.ensemble_versions)]
-                    writer.writerow(header)
-                    for row in zip(*self.ensemble_lev_dists_hist):
-                        writer.writerow(row)
-                print(f"Saved ensemble Levenshtein histories to {csv_filename}")
+                columns.append(f"Target_{self.target_training_set}_{self.target_version}")
+                max_len = len(self.target_distances)
+            else:
+                max_len = 0
+            if hasattr(self, 'ensemble_lev_dists_hist') and self.ensemble_lev_dists_hist:
+                for ts, ver, dists in zip(self.ensemble_training_sets, self.ensemble_versions, self.ensemble_lev_dists_hist):
+                    columns.append(f"Ensemble_{ts}_{ver}")
+                    max_len = max(max_len, len(dists))
+            # Prepare data rows (pad with empty if lengths differ)
+            for i in range(max_len):
+                row = []
+                if hasattr(self, 'target_distances') and len(self.target_distances) > i:
+                    row.append(self.target_distances[i])
+                else:
+                    row.append("")
+                if hasattr(self, 'ensemble_lev_dists_hist') and self.ensemble_lev_dists_hist:
+                    for dists in self.ensemble_lev_dists_hist:
+                        if len(dists) > i:
+                            row.append(dists[i])
+                        else:
+                            row.append("")
+                data_rows.append(row)
+            with open(lev_csv_path, "w", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(columns)
+                writer.writerows(data_rows)
+            print(f"Saved all Levenshtein distances (target + ensemble) to {lev_csv_path}")
 
             # Save ensemble loss histories to CSV
             import os

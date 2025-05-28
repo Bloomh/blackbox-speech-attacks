@@ -5,8 +5,6 @@ import json
 # Example usage: Specify your input, targets, models, and ensembles
 input_wavs = [os.path.join('processed_sound', f) for f in os.listdir('processed_sound')]
 
-print(input_wavs)
-
 # List of target sentences
 import csv
 
@@ -20,16 +18,13 @@ with open("../target_sentences.csv", "r", encoding="utf-8") as csvfile:
             s = row[0].strip()
             all_target_sentences.append(s)
 
-print(all_target_sentences)
-
-
 training_sets = ["an4", "librispeech", "ted"]
 versions = ["v1", "v2"]
 
 attack_params = {
     "epsilon": 0.03,
     "alpha": 0.001,
-    "PGD_iter": 1000,
+    "PGD_iter": 10,
     "n_queries": 250
 }
 
@@ -38,10 +33,15 @@ base_dir = "batch_attack_results"
 os.makedirs(base_dir, exist_ok=True)
 
 # Loop over all combinations
+total_iters = len(input_wavs) * len(all_target_sentences) * len(training_sets) * len(versions)
+curr_iter = 0
 for input_wav in input_wavs:
     for target_sentence in all_target_sentences:
         for target_training_set in training_sets:
             for target_version in versions:
+                curr_iter += 1
+                print(f"Running attack {curr_iter}/{total_iters}")
+
                 target_model_config = {"training_set": target_training_set, "version": target_version}
                 ensemble_model_configs = [
                     {"training_set": ts, "version": v}

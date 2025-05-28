@@ -92,14 +92,7 @@ def run_batch_ensemble_attacks(
                     n_queries=attack_params.get('n_queries', 25)
                 )
                 # Unpack outputs (see Attacker.attack)
-                db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances = out
-                # Collect ensemble predictions and distances from debug info
-                # (Assume attacker stores these in self.ensemble_preds, self.ensemble_lev_dists)
-                ensemble_preds = getattr(attacker, 'ensemble_preds', None)
-                ensemble_lev_dists = getattr(attacker, 'ensemble_lev_dists', None)
-                # Loss histories
-                target_loss_hist = getattr(attacker, 'target_loss_history', None)
-                ensemble_loss_hists = getattr(attacker, 'ensemble_loss_histories', None)
+                db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances, ensemble_lev_dists = out
                 # Compose result row
                 row = {
                     'adv_wav_path': adv_wav_path,
@@ -110,11 +103,8 @@ def run_batch_ensemble_attacks(
                     'ensemble_models': json.dumps(filtered_ens),
                     'attack_params': json.dumps(attack_params),
                     'target_pred': final_output_target,
-                    'target_lev_dist': l_distance,
-                    'ensemble_preds': json.dumps(ensemble_preds) if ensemble_preds else None,
+                    'target_lev_dists': target_distances,
                     'ensemble_lev_dists': json.dumps(ensemble_lev_dists) if ensemble_lev_dists else None,
-                    'target_loss_hist': json.dumps(target_loss_hist) if target_loss_hist else None,
-                    'ensemble_loss_hists': json.dumps(ensemble_loss_hists) if ensemble_loss_hists else None,
                     'max_db_diff': db_difference,
                 }
                 results.append(row)

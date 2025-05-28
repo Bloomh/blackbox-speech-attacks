@@ -656,4 +656,4 @@ class Attacker:
         if self.save:
             torchaudio.save(self.save, src=perturbed_data.cpu(), sample_rate=self.sample_rate)
         self.perturbed_data = perturbed_data
-        return db_difference, l_distance, self.target_string, final_output_target, self.target_distances, self.surrogate_distances
+        return db_difference, l_distance, self.target_string, final_output_target, self.target_distances, self.surrogate_distances, self.ensemble_lev_dists_hist

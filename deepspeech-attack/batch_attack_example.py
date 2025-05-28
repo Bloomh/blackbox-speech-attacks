@@ -24,7 +24,7 @@ versions = ["v1", "v2"]
 attack_params = {
     "epsilon": 0.03,
     "alpha": 0.001,
-    "PGD_iter": 8,
+    "PGD_iter": 250,
     "n_queries": 250
 }
 
@@ -41,7 +41,7 @@ jobs = []
 wav_sentence_pairs = list(product(input_wavs, all_target_sentences))
 for target_training_set in training_sets:
     for target_version in versions:
-        for input_wav, target_sentence in sample(wav_sentence_pairs, 3):
+        for input_wav, target_sentence in sample(wav_sentence_pairs, 5):
             jobs.append((input_wav, target_sentence, target_training_set, target_version))
 
 for job in tqdm(jobs, desc="Batch Attacks"):

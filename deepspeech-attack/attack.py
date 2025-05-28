@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch
 import Levenshtein
 import torchaudio
-import numpy as np
 import matplotlib.pyplot as plt
 import math
 import hashlib
+import numpy as np
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     out = []
@@ -545,14 +545,17 @@ class Attacker:
             plt.figure(figsize=(10, 6))
             # Target model distances
             if hasattr(self, 'target_distances') and len(self.target_distances) > 0:
-                plt.plot(self.target_distances, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
+                plt.plot(self.target_distances, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=4, linestyle="--")
             # Ensemble model distances (plot as lines, not horizontal)
             if hasattr(self, 'ensemble_lev_dists_hist'):
                 for idx, (dists, ts, ver) in enumerate(zip(self.ensemble_lev_dists_hist, self.ensemble_training_sets, self.ensemble_versions)):
-                    plt.plot(dists, label=f"Ensemble {ts}_{ver}", linestyle=":", alpha=0.7)
+                    plt.plot(dists, label=f"Ensemble {ts}_{ver}", alpha=0.5)
+                mean_dists = np.mean(self.ensemble_lev_dists_hist, axis=0)
+                plt.plot(mean_dists, color='black', linewidth=4, label="Ensemble Mean", alpha=1)
+
             plt.xlabel('PGD Iteration')
             plt.ylabel('Levenshtein Distance')
-            plt.title('Levenshtein Distance to Target Sentence (Adversarial Output)')
+            plt.title('Levenshtein Distance at Each PGD Iteration')
             plt.legend()
             plt.tight_layout()
             plt.savefig('levenshtein_distances_lineplot.png')
@@ -592,10 +595,16 @@ class Attacker:
             avg_loss_history = [sum(losses_at_step)/len(losses_at_step) for losses_at_step in zip(*self.ensemble_loss_histories)]
 
             plt.figure(figsize=(10, 6))
-            for idx, (loss_history, training_set, version) in enumerate(zip(self.ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
-                plt.plot(loss_history, label=f"{training_set}_{version}", alpha=0.7)
-            plt.plot(avg_loss_history, label="Average Ensemble Loss", color="black", linewidth=3)
-            plt.plot(self.target_loss_history, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=2, linestyle="--")
+            # Target model loss
+            if hasattr(self, 'target_loss_history') and len(self.target_loss_history) > 0:
+                plt.plot(self.target_loss_history, label=f"Target {self.target_training_set}_{self.target_version}", color="red", linewidth=4, linestyle="--")
+            # Ensemble model losses
+            if hasattr(self, 'ensemble_loss_histories'):
+                for idx, (loss_history, training_set, version) in enumerate(zip(self.ensemble_loss_histories, self.ensemble_training_sets, self.ensemble_versions)):
+                    plt.plot(loss_history, label=f"Ensemble {training_set}_{version}", alpha=0.5)
+                mean_loss_history = np.mean(self.ensemble_loss_histories, axis=0)
+                plt.plot(mean_loss_history, color='black', linewidth=4, label="Ensemble Mean", alpha=1)
+
             plt.xlabel("PGD Iteration")
             plt.ylabel("Loss")
             plt.title("Ensemble and Target Model Losses During PGD Attack")

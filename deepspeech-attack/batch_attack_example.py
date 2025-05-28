@@ -3,7 +3,9 @@ import os
 import json
 
 # Example usage: Specify your input, targets, models, and ensembles
-input_wav = "processed_sound/normal0.wav"
+input_wavs = [os.path.join('processed_sound', f) for f in os.listdir('processed_sound')]
+
+print(input_wavs)
 
 # List of target sentences
 import csv
@@ -18,29 +20,11 @@ with open("../target_sentences.csv", "r", encoding="utf-8") as csvfile:
             s = row[0].strip()
             all_target_sentences.append(s)
 
+print(all_target_sentences)
 
-# List of possible target model configs
-all_target_model_configs = [
-    {"training_set": "librispeech", "version": "v2"},
-    {"training_set": "ted", "version": "v2"},
-    {"training_set": "an4", "version": "v2"}
-]
 
-# List of ensemble sets (each is a list of configs)
-all_ensemble_model_configs = [
-    [
-        {"training_set": "librispeech", "version": "v1"},
-        {"training_set": "librispeech", "version": "v2"},
-        {"training_set": "ted", "version": "v2"},
-        {"training_set": "an4", "version": "v1"},
-        {"training_set": "an4", "version": "v2"}
-    ],
-    [
-        {"training_set": "librispeech", "version": "v2"},
-        {"training_set": "ted", "version": "v2"}
-    ]
-    # Add more ensemble sets as needed
-]
+training_sets = ["an4", "librispeech", "ted"]
+versions = ["v1", "v2"]
 
 attack_params = {
     "epsilon": 0.03,
@@ -48,32 +32,34 @@ attack_params = {
     "PGD_iter": 1000,
     "n_queries": 250
 }
+
 device = "cuda"
 base_dir = "batch_attack_results"
 os.makedirs(base_dir, exist_ok=True)
 
 # Loop over all combinations
-for ens_idx, ensemble_model_configs in enumerate(all_ensemble_model_configs):
-    for tgt_idx, target_model_config in enumerate(all_target_model_configs):
-        for sent_idx, target_sentence in enumerate(all_target_sentences):
-            # Use unique output file per combo
-            ens_str = "_".join([f"{cfg['training_set']}-{cfg['version']}" for cfg in ensemble_model_configs])
-            tgt_str = f"{target_model_config['training_set']}-{target_model_config['version']}"
-            sent_str = target_sentence.replace(" ", "_").replace("/", "-")  # Truncate for filename safety
-            output_dir = os.path.join(base_dir, ens_str, tgt_str, sent_str)
-            os.makedirs(output_dir, exist_ok=True)
-            output_csv = os.path.join(
-                output_dir,
-                f"results_tgt-{tgt_str}_ens-{ens_str}_sent-{sent_str}.csv"
-            )
-            print(f"Running attack: Target={tgt_str}, Ensemble={ens_str}, Sentence=\"{target_sentence}\"")
-            run_batch_ensemble_attacks(
-                input_wav=input_wav,
-                target_sentences=[target_sentence],
-                target_model_configs=[target_model_config],
-                ensemble_model_configs=[ensemble_model_configs],
-                attack_params=attack_params,
-                device=device,
-                output_csv=output_csv,
-                adv_output_dir=output_dir
-            )
+for input_wav in input_wavs:
+    for target_sentence in all_target_sentences:
+        for target_training_set in training_sets:
+            for target_version in versions:
+                target_model_config = {"training_set": target_training_set, "version": target_version}
+                ensemble_model_configs = [
+                    {"training_set": ts, "version": v}
+                    for ts in training_sets
+                    for v in versions
+                    if not (ts == target_training_set and v == target_version) and v != target_version
+                ]
+
+                uid = f"{target_training_set}-{target_version}-{target_sentence}-{input_wav.split("/")[-1]}"
+                print(f"Running attack on {uid}")
+
+                run_batch_ensemble_attacks(
+                    input_wav=input_wav,
+                    target_sentences=[target_sentence],
+                    target_model_configs=[target_model_config],
+                    ensemble_model_configs=[ensemble_model_configs],
+                    attack_params=attack_params,
+                    device=device,
+                    output_csv=os.path.join(base_dir, f"{uid}.csv"),
+                    adv_output_dir=os.path.join(base_dir, uid)
+                )

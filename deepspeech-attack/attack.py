@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import hashlib
+from tqdm import tqdm
 
 def target_sentence_to_label(sentence, labels="_'ABCDEFGHIJKLMNOPQRSTUVWXYZ "):
     sentence = sentence.upper()
@@ -488,12 +489,13 @@ class Attacker:
             self.ensemble_loss_histories = [[] for _ in self.ensemble_models]
             self.target_loss_history = []
 
-            for i in range(PGD_round):
-                print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
-
+            for i in tqdm(range(PGD_round)):
                 A = epsilon/10
-                noise = torch.empty_like(data).uniform_(-A, A)
-                data = torch.clamp(data + noise, min=-epsilon, max=epsilon).detach().requires_grad_(True)
+                noise_perturb = torch.empty_like(data).uniform_(-A, A)
+                perturbation = torch.clamp(data + noise_perturb - data_raw, min=-epsilon, max=epsilon)
+                data = data + perturbation
+                data = data.detach().requires_grad_(True)
+
                 if i == 0:
                     print(f"[INFO] Added uniform noise in range [-{A}, {A}] at PGD step 1.")
 

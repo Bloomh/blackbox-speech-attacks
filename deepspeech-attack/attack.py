@@ -490,7 +490,7 @@ class Attacker:
             self.target_loss_history = []
 
             for i in tqdm(range(PGD_round)):
-                A = epsilon / (i+1)
+                A = epsilon / 25 / (i+1)
                 noise_perturb = torch.empty_like(data).uniform_(-A, A)
                 data = data + noise_perturb
                 data = data.detach().requires_grad_(True)

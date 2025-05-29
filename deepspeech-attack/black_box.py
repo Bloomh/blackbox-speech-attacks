@@ -99,7 +99,7 @@ if __name__ == "__main__":
         ensemble_model_info=[load_surrogate_model(trainset, version, args.device) for trainset, version in zip(ensemble_training_sets, ensemble_versions)],
         ensemble_weights=None
     )
-    db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances = attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
+    db_difference, l_distance, target_string, final_output_target, target_distances, surrogate_distances, ensemble_lev_dists_hist, ensemble_loss_histories, target_loss_history = attacker.attack(epsilon=args.epsilon, alpha=args.alpha, attack_type=args.mode, PGD_round=args.PGD_iter, n_queries=args.n_queries)
 
     if args.mode != "ENSEMBLE":
         # Plot and save Levenshtein distances over time

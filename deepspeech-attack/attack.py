@@ -491,7 +491,7 @@ class Attacker:
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
 
-                A = 0.02
+                A = epsilon/10
                 noise = torch.empty_like(data).uniform_(-A, A)
                 data = torch.clamp(data + noise, min=-epsilon, max=epsilon).detach().requires_grad_(True)
                 if i == 0:

@@ -490,7 +490,12 @@ class Attacker:
 
             for i in range(PGD_round):
                 print(f"PGD processing ...  {i+1} / {PGD_round}", end="\r")
-                data.requires_grad = True
+
+                A = 0.02
+                noise = torch.empty_like(data).uniform_(-A, A)
+                data = torch.clamp(data + noise, min=-epsilon, max=epsilon).detach().requires_grad_(True)
+                if i == 0:
+                    print(f"[INFO] Added uniform noise in range [-{A}, {A}] at PGD step 1.")
 
                 spec = torch_spectrogram(data, self.torch_stft)
                 input_sizes = torch.IntTensor([spec.size(3)]).int()
